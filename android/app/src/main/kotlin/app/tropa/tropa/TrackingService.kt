@@ -54,6 +54,7 @@ class TrackingService : Service(), LocationListener {
         @Volatile var distanceM = 0.0
         @Volatile var lastAcc = 0f
         @Volatile var startMs = 0L
+        @Volatile var lastFixAt = 0L
 
         fun status(): Map<String, Any> = mapOf(
             "running" to running,
@@ -61,7 +62,8 @@ class TrackingService : Service(), LocationListener {
             "points" to points,
             "distance" to distanceM,
             "accuracy" to lastAcc.toDouble(),
-            "startMs" to startMs
+            "startMs" to startMs,
+            "sinceFix" to (if (running && lastFixAt > 0) (System.currentTimeMillis() - lastFixAt) / 1000 else 0L)
         )
 
         fun openDb(context: Context): SQLiteDatabase {
@@ -106,7 +108,14 @@ class TrackingService : Service(), LocationListener {
     private var lastFixWall = 0L
     private var stopRequested = false
     private var alertActive = false
+    private var signalLost = false
     private var beatCount = 0
+    private val gpsOffCheck = Runnable {
+        // Debounce: alert only if GPS is still off 10 s after it was switched off.
+        if (lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == false) {
+            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+        }
+    }
 
     private val heartbeat = object : Runnable {
         override fun run() {
@@ -165,6 +174,7 @@ class TrackingService : Service(), LocationListener {
 
         acquireWakeLock()
         lastFixWall = System.currentTimeMillis()
+        lastFixAt = lastFixWall
         running = true
         requestUpdates()
         handler.postDelayed(heartbeat, HEARTBEAT_MS)
@@ -255,6 +265,7 @@ class TrackingService : Service(), LocationListener {
     override fun onLocationChanged(loc: Location) {
         val now = System.currentTimeMillis()
         lastFixWall = now
+        lastFixAt = now
         clearAlert()
         val acc = if (loc.hasAccuracy()) loc.accuracy else 99f
         lastAcc = acc
@@ -318,11 +329,18 @@ class TrackingService : Service(), LocationListener {
         val sinceMs = System.currentTimeMillis() - lastFixWall
         val gpsOn = lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) ?: true
 
-        // Alert the user as soon as recording is clearly interrupted.
+        // Loud alert only when the user can fix it (GPS switched off). "GPS on but no satellites"
+        // (forest, tunnel, cold start) is only logged: alerting would be pointless.
         if (!gpsOn) {
             raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
         } else if (sinceMs > NO_SIGNAL_MS) {
-            raiseAlert("Нет сигнала GPS уже ${sinceMs / 1000} с", "Запись маршрута приостановлена, пока сигнал не вернётся.")
+            if (!signalLost) {
+                signalLost = true
+                log(this, "SIGNAL_LOST", "GPS on but no fixes for ${sinceMs / 1000}s (no alert: user cannot fix this)")
+            }
+        } else if (signalLost) {
+            signalLost = false
+            log(this, "SIGNAL_BACK", "fixes are arriving again")
         }
 
         beatCount++
@@ -409,12 +427,21 @@ class TrackingService : Service(), LocationListener {
         super.onTaskRemoved(rootIntent)
     }
 
-    override fun onProviderEnabled(provider: String) = log(this, "GPS_SERVICE", "provider $provider enabled")
+    override fun onProviderEnabled(provider: String) {
+        log(this, "GPS_SERVICE", "provider $provider enabled")
+        if (provider == LocationManager.GPS_PROVIDER) {
+            // Reset so that the next time GPS is switched off the alert fires again.
+            handler.removeCallbacks(gpsOffCheck)
+            alertActive = false
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID)
+        }
+    }
 
     override fun onProviderDisabled(provider: String) {
         log(this, "GPS_SERVICE", "provider $provider disabled")
         if (provider == LocationManager.GPS_PROVIDER) {
-            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+            handler.removeCallbacks(gpsOffCheck)
+            handler.postDelayed(gpsOffCheck, 10_000L)
         }
     }
 

@@ -34,6 +34,10 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   double distanceM = 0;
   double lastAccuracy = 0;
 
+  /// Seconds since the last GPS fix, and whether the system location service is on.
+  int sinceFixSec = 0;
+  bool gpsEnabled = true;
+
   /// Set at startup when the previous run ended without "stop" and nothing is recording now.
   SessionInfo? interrupted;
 
@@ -79,7 +83,9 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       final dist = (m['distance'] as num?)?.toDouble() ?? 0;
       final acc = (m['accuracy'] as num?)?.toDouble() ?? 0;
       final start = (m['startMs'] as num?)?.toInt();
+      final since = (m['sinceFix'] as num?)?.toInt() ?? 0;
       final changed = running != recording ||
+          (since >= 20) != (sinceFixSec >= 20) ||
           pts != pointCount ||
           (dist - distanceM).abs() > 0.5 ||
           acc != lastAccuracy;
@@ -88,6 +94,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       pointCount = pts;
       distanceM = dist;
       lastAccuracy = acc;
+      sinceFixSec = since;
       startedAt = running && start != null && start > 0 ? DateTime.fromMillisecondsSinceEpoch(start) : null;
       if (running) interrupted = null;
       if (changed) notifyListeners();
@@ -121,8 +128,16 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
         _lastModes = now;
       }
     });
+    Geolocator.isLocationServiceEnabled().then((v) {
+      gpsEnabled = v;
+      notifyListeners();
+    });
     Geolocator.getServiceStatusStream().listen(
-      (s) => _log.log('GPS_SERVICE', s == ServiceStatus.enabled ? 'GPS ON' : 'GPS OFF'),
+      (s) {
+        _log.log('GPS_SERVICE', s == ServiceStatus.enabled ? 'GPS ON' : 'GPS OFF');
+        gpsEnabled = s == ServiceStatus.enabled;
+        notifyListeners();
+      },
       onError: (Object e) => _log.log('GPS_SERVICE', 'status stream error: $e'),
     );
   }

@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -15,9 +17,36 @@ import 'package:flutter/services.dart';
 import 'recorder.dart';
 import 'route_view.dart';
 
+/// App theme: light / dark / follow the phone. Stored in a small file next to the log.
+final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);
+
+Future<File> _themeFile() async => File('${(await getApplicationDocumentsDirectory()).path}/theme_mode.txt');
+
+Future<void> _loadTheme() async {
+  try {
+    final f = await _themeFile();
+    if (await f.exists()) {
+      final v = (await f.readAsString()).trim();
+      themeMode.value = ThemeMode.values.firstWhere((m) => m.name == v, orElse: () => ThemeMode.system);
+    }
+  } catch (_) {
+    // keep default
+  }
+}
+
+Future<void> _saveTheme(ThemeMode m) async {
+  themeMode.value = m;
+  try {
+    await (await _themeFile()).writeAsString(m.name);
+  } catch (_) {
+    // theme still applies for this run
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DebugLog.instance.init();
+  await _loadTheme();
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
   await _logDevice();
   await Recorder.instance.init();
@@ -47,13 +76,17 @@ class TropaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Tropa',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: const Color(0xFF2E7D32), useMaterial3: true),
-      darkTheme: ThemeData(
-          colorSchemeSeed: const Color(0xFF2E7D32), brightness: Brightness.dark, useMaterial3: true),
-      home: const HomePage(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeMode,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'Tropa',
+        debugShowCheckedModeBanner: false,
+        themeMode: mode,
+        theme: ThemeData(colorSchemeSeed: const Color(0xFF2E7D32), useMaterial3: true),
+        darkTheme: ThemeData(
+            colorSchemeSeed: const Color(0xFF2E7D32), brightness: Brightness.dark, useMaterial3: true),
+        home: const HomePage(),
+      ),
     );
   }
 }
@@ -216,6 +249,31 @@ class _HomePageState extends State<HomePage> {
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
   }
 
+  Future<void> _pickTheme() async {
+    final picked = await showDialog<ThemeMode>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: const Text('Тема оформления'),
+        children: [
+          for (final (mode, label) in [
+            (ThemeMode.system, 'Как на смартфоне'),
+            (ThemeMode.light, 'Светлая'),
+            (ThemeMode.dark, 'Тёмная'),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(c, mode),
+              child: Row(children: [
+                Icon(themeMode.value == mode ? Icons.radio_button_checked : Icons.radio_button_off),
+                const SizedBox(width: 12),
+                Text(label),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (picked != null) await _saveTheme(picked);
+  }
+
   /// Quick notes for the test walk: what the user did with the phone and when.
   Future<void> _addMark() async {
     const presets = [
@@ -304,6 +362,7 @@ class _HomePageState extends State<HomePage> {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) async {
+              if (v == 'theme') await _pickTheme();
               if (v == 'mark') await _addMark();
               if (v == 'log') await _shareLog();
               if (v == 'clear') {
@@ -312,6 +371,7 @@ class _HomePageState extends State<HomePage> {
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(value: 'theme', child: Text('Тема оформления')),
               PopupMenuItem(value: 'mark', child: Text('Добавить метку в лог')),
               PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
               PopupMenuItem(value: 'clear', child: Text('Очистить лог')),
@@ -322,6 +382,19 @@ class _HomePageState extends State<HomePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (rec.recording && !rec.gpsEnabled)
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                leading: const Icon(Icons.location_off),
+                title: const Text('GPS выключен — маршрут не пишется'),
+                subtitle: const Text('Включите геолокацию, запись продолжится сама.'),
+                trailing: FilledButton(
+                  onPressed: Geolocator.openLocationSettings,
+                  child: const Text('Включить'),
+                ),
+              ),
+            ),
           if (rec.interrupted != null && !rec.recording)
             Card(
               color: Theme.of(context).colorScheme.errorContainer,
@@ -348,7 +421,14 @@ class _HomePageState extends State<HomePage> {
                       _stat('Дистанция', '${(rec.distanceM / 1000).toStringAsFixed(2)} км'),
                       _stat('Время', rec.recording ? _fmt(elapsed) : '—'),
                       _stat('Точки', '${rec.pointCount}'),
-                      _stat('Точность', rec.recording ? '${rec.lastAccuracy.toStringAsFixed(0)} м' : '—'),
+                      _stat(
+                        rec.recording && rec.gpsEnabled && rec.sinceFixSec >= 20 ? 'Сигнал' : 'Точность',
+                        !rec.recording
+                            ? '—'
+                            : (rec.gpsEnabled && rec.sinceFixSec >= 20
+                                ? 'нет ${rec.sinceFixSec} с'
+                                : '${rec.lastAccuracy.toStringAsFixed(0)} м'),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 16),
