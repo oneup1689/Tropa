@@ -100,7 +100,8 @@ class SettingsPage extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Expanded(child: Text(d.title, style: Theme.of(context).textTheme.bodyLarge)),
-              Text('${value.round()} ${d.unit}', style: Theme.of(context).textTheme.titleSmall),
+              Text(d.zeroMeansAuto && value == 0 ? 'авто' : '${value.round()} ${d.unit}',
+                  style: Theme.of(context).textTheme.titleSmall),
             ]),
             if (d.subtitle.isNotEmpty) Text(d.subtitle, style: Theme.of(context).textTheme.bodySmall),
             Slider(

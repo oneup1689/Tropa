@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'gpx.dart';
+import 'modes.dart';
 import 'package:flutter/services.dart';
 
 import 'recorder.dart';
@@ -201,7 +202,7 @@ class _HomePageState extends State<HomePage> {
               value: heal,
               onChanged: (v) => setS(() => heal = v ?? heal),
               title: const Text('Склеить короткие разрывы'),
-              subtitle: Text('Только пешие участки до ${AppSettings.instance.healSettings.bridgeMaxMeters.round()} м'),
+              subtitle: const Text('Только короткие участки, где движение было правдоподобным'),
             ),
             CheckboxListTile(
               value: withTime,
@@ -393,12 +394,26 @@ class _HomePageState extends State<HomePage> {
                   Text(rec.recording ? 'Идёт запись' : 'Запись остановлена',
                       style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 12),
+                  // Travel mode: chosen before the start, locked while recording.
+                  Wrap(spacing: 8, alignment: WrapAlignment.center, children: [
+                    for (final m in TravelMode.values)
+                      ChoiceChip(
+                        label: Text(m.label),
+                        selected: AppSettings.instance.travelMode == m,
+                        onSelected: rec.recording ? null : (_) async {
+                          await AppSettings.instance.setTravelMode(m);
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                  ]),
+                  const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       _stat('Дистанция', '${(rec.distanceM / 1000).toStringAsFixed(2)} км'),
                       _stat('Время', rec.recording ? _fmt(elapsed) : '—'),
-                      _stat('Точки', '${rec.pointCount}'),
+                      _stat(rec.autoPaused ? 'Пауза' : 'В движении',
+                          rec.recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—'),
                       _stat(
                         rec.recording && rec.gpsEnabled && rec.sinceFixSec >= 20 ? 'Сигнал' : 'Точность',
                         !rec.recording
@@ -429,10 +444,15 @@ class _HomePageState extends State<HomePage> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => RouteViewPage(sessionId: s.id, title: _date(s.startMs))),
+                      builder: (_) => RouteViewPage(
+                            sessionId: s.id,
+                            title: _date(s.startMs),
+                            mode: TravelModeInfo.parse(s.mode),
+                          )),
                 ),
                 title: Text(_date(s.startMs)),
-                subtitle: Text('Точек: ${s.pointCount} · ${_status(s.status)}'),
+                subtitle: Text(
+                    '${TravelModeInfo.parse(s.mode).label} · точек: ${s.pointCount} · ${_status(s.status)}'),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   IconButton(icon: const Icon(Icons.ios_share), onPressed: () => _exportGpx(s.id)),
                   IconButton(

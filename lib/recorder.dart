@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'db.dart';
 import 'debug_log.dart';
+import 'modes.dart';
 import 'settings.dart';
 
 /// Recording facade.
@@ -38,6 +39,10 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   /// Seconds since the last GPS fix, and whether the system location service is on.
   int sinceFixSec = 0;
   bool gpsEnabled = true;
+
+  /// Time spent moving (native service) and whether auto-pause has lowered the GPS rate.
+  int movingSeconds = 0;
+  bool autoPaused = false;
 
   /// Set at startup when the previous run ended without "stop" and nothing is recording now.
   SessionInfo? interrupted;
@@ -96,9 +101,14 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       distanceM = dist;
       lastAccuracy = acc;
       sinceFixSec = since;
+      final movingSec = ((m['movingMs'] as num?)?.toInt() ?? 0) ~/ 1000;
+      final paused = m['paused'] == true;
+      final timeChanged = movingSec != movingSeconds || paused != autoPaused;
+      movingSeconds = movingSec;
+      autoPaused = paused;
       startedAt = running && start != null && start > 0 ? DateTime.fromMillisecondsSinceEpoch(start) : null;
       if (running) interrupted = null;
-      if (changed) notifyListeners();
+      if (changed || timeChanged) notifyListeners();
     } catch (e) {
       _log.log('RECORDER', 'status poll failed: $e');
     }
@@ -174,8 +184,12 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------------------------------------------------------------- start / stop
 
-  Future<bool> start({int? resumeSessionId}) async {
+  Future<bool> start({int? resumeSessionId, TravelMode? chosenMode}) async {
     if (recording) return true;
+    // A resumed walk keeps the mode it was recorded in.
+    final mode = resumeSessionId != null
+        ? TravelModeInfo.parse(await TrackDb.instance.sessionMode(resumeSessionId))
+        : (chosenMode ?? AppSettings.instance.travelMode);
     if (!await Geolocator.isLocationServiceEnabled()) {
       _log.log('START', 'refused: location service disabled');
       return false;
@@ -192,7 +206,11 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       await _sys.invokeMethod('startTracking', {
         'session': resumeSessionId ?? 0,
         'maxAccuracy': AppSettings.instance.maxAccuracyM,
-        'intervalMs': AppSettings.instance.fixIntervalMs,
+        'intervalMs': AppSettings.instance.fixIntervalMsFor(mode),
+        'mode': mode.code,
+        'jumpSpeed': profileOf(mode).jumpSpeedMs,
+        'movingSpeed': profileOf(mode).movingSpeedMs,
+        'autoPause': AppSettings.instance.autoPause,
       });
       // Give the service a moment to publish its state.
       for (var i = 0; i < 10 && !recording; i++) {
@@ -201,7 +219,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       }
       return recording;
     }
-    return _startDart(resumeSessionId);
+    return _startDart(resumeSessionId, mode);
   }
 
   Future<void> stop() async {
@@ -219,7 +237,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------------------------------------------------------------- iOS (Dart) path
 
-  Future<bool> _startDart(int? resumeSessionId) async {
+  Future<bool> _startDart(int? resumeSessionId, TravelMode mode) async {
     if (resumeSessionId != null) {
       sessionId = resumeSessionId;
       await TrackDb.instance.reopenSession(resumeSessionId);
@@ -227,7 +245,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       pointCount = pts.length;
       distanceM = _distanceOf(pts);
     } else {
-      sessionId = await TrackDb.instance.startSession();
+      sessionId = await TrackDb.instance.startSession(mode: mode.code);
       pointCount = 0;
       distanceM = 0;
     }

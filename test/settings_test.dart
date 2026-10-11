@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tropa/modes.dart';
 import 'package:tropa/settings.dart';
 
 void main() {
@@ -20,9 +21,27 @@ void main() {
     await s.set('heal_bridge_max_m', 200);
     await s.setPro(false);
     expect(s.pro, isFalse);
-    expect(s.healSettings.bridgeMaxMeters, 200);
+    expect(s.healFor(TravelMode.walk).walkLimit, 200);
     await s.resetAdvanced();
-    expect(s.healSettings.bridgeMaxMeters, 150);
+    expect(s.healFor(TravelMode.walk).walkLimit, 150); // 0 = automatic
+  });
+
+  test('GPS interval is chosen by the travel mode unless Pro overrides it', () async {
+    final s = AppSettings.instance;
+    await s.resetAdvanced();
+    expect(s.fixIntervalMsFor(TravelMode.car), 1000);
+    expect(s.fixIntervalMsFor(TravelMode.walk), 2000);
+    await s.set('fix_interval_s', 5);
+    expect(s.fixIntervalMsFor(TravelMode.car), 5000);
+    await s.resetAdvanced();
+  });
+
+  test('travel mode is remembered', () async {
+    final s = AppSettings.instance;
+    expect(s.travelMode, TravelMode.mixed); // default
+    await s.setTravelMode(TravelMode.bike);
+    expect(s.travelMode, TravelMode.bike);
+    await s.setTravelMode(TravelMode.mixed);
   });
 
   test('theme setting drives the theme notifier', () async {

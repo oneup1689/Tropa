@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'db.dart';
+import 'modes.dart';
 
 /// How a gap between two consecutive recorded segments is treated.
 enum GapKind {
@@ -17,21 +18,67 @@ enum GapKind {
   keepBreak,
 }
 
+/// What kind of movement a gap looks like, judged by its implied speed.
+enum Activity { walk, bike, car }
+
 class HealSettings {
   /// A gap longer than this many seconds starts a new segment.
   final int gapSeconds;
   final double stillMeters;
-  final double bridgeMaxMeters;
-  final double walkMaxSpeed; // m/s
   final int longGapSeconds;
+
+  /// Speed ceilings (m/s) that separate walking / cycling / driving gaps.
+  final double walkMaxSpeed;
+  final double bikeMaxSpeed;
+  final double carMaxSpeed;
+
+  /// Longest gap that may be bridged, per activity.
+  final double walkLimit;
+  final double bikeLimit;
+  final double carLimit;
+
+  /// Activities this travel mode may bridge; a gap of any other kind stays open.
+  final Set<Activity> allowed;
 
   const HealSettings({
     this.gapSeconds = 30,
     this.stillMeters = 20,
-    this.bridgeMaxMeters = 150,
-    this.walkMaxSpeed = 2.8,
     this.longGapSeconds = 20 * 60,
+    this.walkMaxSpeed = 2.8,
+    this.bikeMaxSpeed = 12,
+    this.carMaxSpeed = 45,
+    this.walkLimit = 150,
+    this.bikeLimit = 400,
+    this.carLimit = 1000,
+    this.allowed = const {Activity.walk},
   });
+
+  /// Rules for a travel mode. [walkLimitOverride] is the Pro setting, if the user changed it.
+  factory HealSettings.forMode(TravelMode mode, {double? walkLimitOverride}) {
+    final walk = walkLimitOverride != null && walkLimitOverride > 0 ? walkLimitOverride : 150.0;
+    final allowed = switch (mode) {
+      TravelMode.walk => const {Activity.walk},
+      TravelMode.bike => const {Activity.walk, Activity.bike},
+      TravelMode.car || TravelMode.mixed => const {Activity.walk, Activity.bike, Activity.car},
+    };
+    return HealSettings(walkLimit: walk, allowed: allowed);
+  }
+
+  /// Kept for the UI texts: the walking limit.
+  double get bridgeMaxMeters => walkLimit;
+
+  Activity? activityForSpeed(double v) {
+    if (v <= walkMaxSpeed) return Activity.walk;
+    if (v <= bikeMaxSpeed) return Activity.bike;
+    if (v <= carMaxSpeed) return Activity.car;
+    return null;
+  }
+
+  double limitFor(Activity a) => switch (a) {
+        Activity.walk => walkLimit,
+        Activity.bike => bikeLimit,
+        Activity.car => carLimit,
+      };
 }
 
 class GapInfo {
@@ -99,8 +146,10 @@ double haversine(double lat1, double lon1, double lat2, double lon2) {
 GapKind classifyGap(double meters, int seconds, HealSettings s) {
   if (seconds > s.longGapSeconds) return GapKind.keepBreak;
   if (meters <= s.stillMeters) return GapKind.glueStill;
-  if (meters / math.max(seconds, 1) > s.walkMaxSpeed) return GapKind.keepBreak;
-  if (meters <= s.bridgeMaxMeters) return GapKind.bridge;
+  final activity = s.activityForSpeed(meters / math.max(seconds, 1));
+  // Too fast for any activity, or not something this travel mode would do: leave it open.
+  if (activity == null || !s.allowed.contains(activity)) return GapKind.keepBreak;
+  if (meters <= s.limitFor(activity)) return GapKind.bridge;
   return GapKind.snapLater;
 }
 

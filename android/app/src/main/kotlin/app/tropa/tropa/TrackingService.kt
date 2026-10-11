@@ -38,6 +38,10 @@ class TrackingService : Service(), LocationListener {
         const val EXTRA_SESSION = "session"
         const val EXTRA_MAX_ACC = "maxAccuracy"
         const val EXTRA_INTERVAL = "intervalMs"
+        const val EXTRA_MODE = "mode"
+        const val EXTRA_JUMP = "jumpSpeed"
+        const val EXTRA_MOVING = "movingSpeed"
+        const val EXTRA_AUTOPAUSE = "autoPause"
         const val PREFS = "tropa_tracking"
         const val KEY_SESSION = "session"
         private const val CHANNEL_ID = "tropa_tracking"
@@ -49,6 +53,8 @@ class TrackingService : Service(), LocationListener {
         private const val WATCHDOG_MS = 90_000L
         private const val STATIONARY_STORE_MS = 15_000L
         private const val GAP_MS = 30_000L
+        private const val PAUSE_AFTER_MS = 60_000L // standing this long -> low-power GPS rate
+        private const val LOW_POWER_INTERVAL_MS = 10_000L
 
         @Volatile var running = false
         @Volatile var sessionId = 0L
@@ -57,8 +63,12 @@ class TrackingService : Service(), LocationListener {
         @Volatile var lastAcc = 0f
         @Volatile var startMs = 0L
         @Volatile var lastFixAt = 0L
+        @Volatile var movingMs = 0L
+        @Volatile var lowPower = false
 
         fun status(): Map<String, Any> = mapOf(
+            "movingMs" to movingMs,
+            "paused" to lowPower,
             "running" to running,
             "session" to sessionId,
             "points" to points,
@@ -76,8 +86,15 @@ class TrackingService : Service(), LocationListener {
             )
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "start_ms INTEGER NOT NULL, end_ms INTEGER, status TEXT NOT NULL)"
+                    "start_ms INTEGER NOT NULL, end_ms INTEGER, status TEXT NOT NULL, " +
+                    "mode TEXT NOT NULL DEFAULT 'mixed')"
             )
+            // Databases created by older builds have no "mode" column yet.
+            var hasMode = false
+            db.rawQuery("PRAGMA table_info(sessions)", null).use { c ->
+                while (c.moveToNext()) if (c.getString(1) == "mode") hasMode = true
+            }
+            if (!hasMode) db.execSQL("ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'mixed'")
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS points(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                     "session_id INTEGER NOT NULL, ts_ms INTEGER NOT NULL, lat REAL NOT NULL, " +
@@ -111,6 +128,11 @@ class TrackingService : Service(), LocationListener {
     private var stopRequested = false
     private var maxAccuracy = 50f
     private var intervalMs = 2000L
+    private var modeCode = "mixed"
+    private var jumpSpeed = 70.0
+    private var movingSpeed = 0.5
+    private var autoPause = true
+    private var lastMovingWall = 0L
     private var alertActive = false
     private var signalLost = false
     private var beatCount = 0
@@ -155,12 +177,29 @@ class TrackingService : Service(), LocationListener {
         if (intent != null && intent.hasExtra(EXTRA_MAX_ACC)) {
             maxAccuracy = intent.getFloatExtra(EXTRA_MAX_ACC, 50f)
             intervalMs = intent.getLongExtra(EXTRA_INTERVAL, 2000L)
-            prefs.edit().putFloat("max_acc", maxAccuracy).putLong("interval_ms", intervalMs).apply()
+            modeCode = intent.getStringExtra(EXTRA_MODE) ?: "mixed"
+            jumpSpeed = intent.getDoubleExtra(EXTRA_JUMP, 70.0)
+            movingSpeed = intent.getDoubleExtra(EXTRA_MOVING, 0.5)
+            autoPause = intent.getBooleanExtra(EXTRA_AUTOPAUSE, true)
+            prefs.edit().putFloat("max_acc", maxAccuracy).putLong("interval_ms", intervalMs)
+                .putString("mode", modeCode).putFloat("jump", jumpSpeed.toFloat())
+                .putFloat("moving", movingSpeed.toFloat()).putBoolean("autopause", autoPause).apply()
         } else {
             maxAccuracy = prefs.getFloat("max_acc", 50f)
             intervalMs = prefs.getLong("interval_ms", 2000L)
+            modeCode = prefs.getString("mode", "mixed") ?: "mixed"
+            jumpSpeed = prefs.getFloat("jump", 70f).toDouble()
+            movingSpeed = prefs.getFloat("moving", 0.5f).toDouble()
+            autoPause = prefs.getBoolean("autopause", true)
         }
-        log(this, "SVC", "settings: maxAccuracy=${maxAccuracy}m interval=${intervalMs}ms")
+        lowPower = false
+        movingMs = 0L
+        lastMovingWall = System.currentTimeMillis()
+        log(
+            this, "SVC",
+            "settings: mode=$modeCode maxAccuracy=${maxAccuracy}m interval=${intervalMs}ms " +
+                "jump=${jumpSpeed}m/s moving>=${movingSpeed}m/s autoPause=$autoPause"
+        )
         val database = openDb(this)
         db = database
 
@@ -177,6 +216,7 @@ class TrackingService : Service(), LocationListener {
             val cv = ContentValues().apply {
                 put("start_ms", System.currentTimeMillis())
                 put("status", "active")
+                put("mode", modeCode)
             }
             sessionId = database.insert("sessions", null, cv)
             points = 0
@@ -206,7 +246,11 @@ class TrackingService : Service(), LocationListener {
                 while (c.moveToNext()) {
                     val ts = c.getLong(0)
                     val l = Location("db").apply { latitude = c.getDouble(1); longitude = c.getDouble(2) }
-                    if (prev != null && ts - prevTs <= GAP_MS) distanceM += prev.distanceTo(l)
+                    if (prev != null && ts - prevTs in 1..GAP_MS) {
+                        val d = prev.distanceTo(l)
+                        distanceM += d
+                        if (d >= 2 && d / ((ts - prevTs) / 1000.0) >= movingSpeed) movingMs += ts - prevTs
+                    }
                     prev = l
                     prevTs = ts
                     points++
@@ -269,8 +313,9 @@ class TrackingService : Service(), LocationListener {
         }
         try {
             manager.removeUpdates(this)
-            manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, intervalMs, 0f, this, Looper.getMainLooper())
-            log(this, "SVC", "GPS updates requested, gpsEnabled=${manager.isProviderEnabled(LocationManager.GPS_PROVIDER)}")
+            val every = if (lowPower) LOW_POWER_INTERVAL_MS else intervalMs
+            manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, every, 0f, this, Looper.getMainLooper())
+            log(this, "SVC", "GPS updates requested every ${every}ms, gpsEnabled=${manager.isProviderEnabled(LocationManager.GPS_PROVIDER)}")
         } catch (e: Exception) {
             log(this, "SVC", "requestLocationUpdates failed: $e")
         }
@@ -295,7 +340,7 @@ class TrackingService : Service(), LocationListener {
             dist = prev.distanceTo(loc)
             if (dtSec > 20 && acc > 20f) {
                 skip = "poor first fix after gap (acc=${"%.1f".format(acc)})"
-            } else if (dtSec > 0 && dist / dtSec > 25.0 && acc > 8f) {
+            } else if (dtSec > 0 && dist / dtSec > jumpSpeed && acc > 8f) {
                 skip = "speed jump ${"%.1f".format(dist / dtSec * 3.6)} km/h"
             }
         }
@@ -305,6 +350,25 @@ class TrackingService : Service(), LocationListener {
         }
 
         val moving = prev == null || dist >= maxOf(2f, acc * 0.7f)
+
+        // Moving time and auto-pause. Leaving low power on displacement alone, so a start is not missed.
+        val speedNow = if (prev != null && dtSec > 0) dist / dtSec else 0.0
+        val movingNow = moving && prev != null && dtSec > 0 && speedNow >= movingSpeed
+        val wakeUp = prev != null && dist >= maxOf(5f, acc)
+        if (movingNow && dtSec * 1000 <= GAP_MS) movingMs += (dtSec * 1000).toLong()
+        if (movingNow || wakeUp) {
+            lastMovingWall = now
+            if (lowPower) {
+                lowPower = false
+                log(this, "AUTOPAUSE", "movement detected, back to normal GPS rate")
+                requestUpdates()
+            }
+        } else if (autoPause && !lowPower && now - lastMovingWall > PAUSE_AFTER_MS) {
+            lowPower = true
+            log(this, "AUTOPAUSE", "standing for ${PAUSE_AFTER_MS / 1000}s, GPS rate reduced to save battery")
+            requestUpdates()
+        }
+
         val heartbeatDue = now - lastStoredWall >= STATIONARY_STORE_MS
         if (!moving && !heartbeatDue) return
 
@@ -425,6 +489,7 @@ class TrackingService : Service(), LocationListener {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         running = false
+        lowPower = false
         sessionId = 0
         db?.close()
         db = null

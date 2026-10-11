@@ -18,8 +18,9 @@ class SessionInfo {
   final int? endMs;
   final String status; // active | finished | interrupted
   final int pointCount;
+  final String mode; // TravelMode.code
 
-  SessionInfo(this.id, this.startMs, this.endMs, this.status, this.pointCount);
+  SessionInfo(this.id, this.startMs, this.endMs, this.status, this.pointCount, [this.mode = 'mixed']);
 }
 
 /// Every GPS fix is written to SQLite immediately, so a killed app loses
@@ -35,11 +36,19 @@ class TrackDb {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'tropa.db'),
-      version: 1,
+      version: 2,
+      onUpgrade: (db, oldVersion, _) async {
+        if (oldVersion < 2) {
+          // The native service may already have added the column; ignore the duplicate.
+          try {
+            await db.execute("ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'mixed'");
+          } catch (_) {}
+        }
+      },
       onCreate: (db, _) async {
         await db.execute('CREATE TABLE IF NOT EXISTS sessions('
             'id INTEGER PRIMARY KEY AUTOINCREMENT, start_ms INTEGER NOT NULL, '
-            'end_ms INTEGER, status TEXT NOT NULL)');
+            "end_ms INTEGER, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'mixed')");
         await db.execute('CREATE TABLE IF NOT EXISTS points('
             'id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, '
             'ts_ms INTEGER NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, '
@@ -50,12 +59,19 @@ class TrackDb {
     return _db!;
   }
 
-  Future<int> startSession() async {
+  Future<int> startSession({String mode = 'mixed'}) async {
     final db = await _database;
     return db.insert('sessions', {
       'start_ms': DateTime.now().millisecondsSinceEpoch,
       'status': 'active',
+      'mode': mode,
     });
+  }
+
+  Future<String> sessionMode(int id) async {
+    final db = await _database;
+    final rows = await db.query('sessions', columns: ['mode'], where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? 'mixed' : (rows.first['mode'] as String? ?? 'mixed');
   }
 
   Future<void> reopenSession(int id) async {
@@ -104,7 +120,8 @@ class TrackDb {
     final id = r['id'] as int;
     final c = Sqflite.firstIntValue(
         await db.rawQuery('SELECT COUNT(*) FROM points WHERE session_id = ?', [id]));
-    return SessionInfo(id, r['start_ms'] as int, r['end_ms'] as int?, r['status'] as String, c ?? 0);
+    return SessionInfo(
+        id, r['start_ms'] as int, r['end_ms'] as int?, r['status'] as String, c ?? 0, (r['mode'] as String?) ?? 'mixed');
   }
 
   Future<List<TrackPoint>> points(int sessionId) async {

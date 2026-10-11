@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'db.dart';
 import 'heal.dart';
+import 'modes.dart';
 import 'settings.dart';
 import 'trim.dart';
 
@@ -27,7 +28,8 @@ Future<File> writeGpx(
 }) async {
   final all = await TrackDb.instance.points(sessionId);
   final pts = trimEnds(all, trimStartM, trimEndM);
-  final result = analyzeGaps(pts, settings: AppSettings.instance.healSettings);
+  final mode = TravelModeInfo.parse(await TrackDb.instance.sessionMode(sessionId));
+  final result = analyzeGaps(pts, settings: AppSettings.instance.healFor(mode));
   final b = StringBuffer()
     ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
     ..writeln('<gpx version="1.1" creator="Tropa" xmlns="http://www.topografix.com/GPX/1/1">')

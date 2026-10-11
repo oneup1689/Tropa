@@ -39,6 +39,10 @@ class MainActivity : FlutterActivity() {
                             .putExtra(TrackingService.EXTRA_SESSION, session)
                             .putExtra(TrackingService.EXTRA_MAX_ACC, (call.argument<Number>("maxAccuracy"))?.toFloat() ?: 50f)
                             .putExtra(TrackingService.EXTRA_INTERVAL, (call.argument<Number>("intervalMs"))?.toLong() ?: 2000L)
+                            .putExtra(TrackingService.EXTRA_MODE, call.argument<String>("mode") ?: "mixed")
+                            .putExtra(TrackingService.EXTRA_JUMP, (call.argument<Number>("jumpSpeed"))?.toDouble() ?: 70.0)
+                            .putExtra(TrackingService.EXTRA_MOVING, (call.argument<Number>("movingSpeed"))?.toDouble() ?: 0.5)
+                            .putExtra(TrackingService.EXTRA_AUTOPAUSE, call.argument<Boolean>("autoPause") ?: true)
                         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
                         result.success(null)
                     }

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'heal.dart';
+import 'modes.dart';
 
 enum SettingKind { toggle, choice, number }
 
@@ -25,6 +26,9 @@ class SettingDef {
   final double step;
   final String unit;
 
+  /// For numbers: 0 means "choose automatically" (by travel mode) and is shown as "авто".
+  final bool zeroMeansAuto;
+
   const SettingDef({
     required this.key,
     required this.title,
@@ -38,6 +42,7 @@ class SettingDef {
     this.max = 0,
     this.step = 1,
     this.unit = '',
+    this.zeroMeansAuto = false,
   });
 }
 
@@ -68,15 +73,25 @@ const List<SettingDef> settingDefs = [
   SettingDef(
     key: 'fix_interval_s',
     title: 'Интервал опроса GPS',
-    subtitle: 'Чаще — точнее маршрут, но быстрее садится батарея',
+    subtitle: 'Авто — подбирается по режиму путешествия. Чаще — точнее маршрут, но быстрее садится батарея',
     section: 'Запись',
     kind: SettingKind.number,
-    defaultValue: 2,
+    defaultValue: 0,
     proOnly: true,
-    min: 1,
+    min: 0,
     max: 10,
     step: 1,
     unit: 'с',
+    zeroMeansAuto: true,
+  ),
+  SettingDef(
+    key: 'autopause',
+    title: 'Автопауза',
+    subtitle: 'На стоянке GPS опрашивается реже, чтобы экономить батарею',
+    section: 'Запись',
+    kind: SettingKind.toggle,
+    defaultValue: true,
+    proOnly: true,
   ),
   SettingDef(
     key: 'heal_enabled',
@@ -116,15 +131,16 @@ const List<SettingDef> settingDefs = [
   SettingDef(
     key: 'heal_bridge_max_m',
     title: 'Предел склейки пешком',
-    subtitle: 'Более длинные разрывы не склеиваются прямой линией',
+    subtitle: 'Авто — 150 м. Более длинные разрывы не склеиваются. Для велосипеда и авто пределы подбираются сами',
     section: 'Склейка',
     kind: SettingKind.number,
-    defaultValue: 150,
+    defaultValue: 0,
     proOnly: true,
-    min: 50,
+    min: 0,
     max: 500,
     step: 25,
     unit: 'м',
+    zeroMeansAuto: true,
   ),
 ];
 
@@ -202,9 +218,21 @@ class AppSettings extends ChangeNotifier {
 
   // Typed accessors used by the rest of the app.
   double get maxAccuracyM => getNum('max_accuracy_m');
-  int get fixIntervalMs => (getNum('fix_interval_s') * 1000).round();
+
+  /// GPS interval: the Pro override if set, otherwise the travel mode's own.
+  int fixIntervalMsFor(TravelMode mode) {
+    final custom = getNum('fix_interval_s');
+    return custom > 0 ? (custom * 1000).round() : profileOf(mode).intervalMs;
+  }
+
+  bool get autoPause => getBool('autopause');
+  TravelMode get travelMode => TravelModeInfo.parse(_values['travel_mode'] as String?);
+  Future<void> setTravelMode(TravelMode m) => set('travel_mode', m.code);
+
+  HealSettings healFor(TravelMode mode) =>
+      HealSettings.forMode(mode, walkLimitOverride: getNum('heal_bridge_max_m'));
+
   bool get healEnabled => getBool('heal_enabled');
   double get trimStartM => getNum('trim_start_m');
   double get trimEndM => getNum('trim_end_m');
-  HealSettings get healSettings => HealSettings(bridgeMaxMeters: getNum('heal_bridge_max_m'));
 }

@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import 'db.dart';
 import 'heal.dart';
+import 'modes.dart';
 import 'settings.dart';
+import 'stats.dart';
 
 /// Simple offline preview of a recorded route (no map tiles yet):
 /// solid line where GPS was continuous, a different colour where a short gap
@@ -12,8 +14,9 @@ import 'settings.dart';
 class RouteViewPage extends StatefulWidget {
   final int sessionId;
   final String title;
+  final TravelMode mode;
 
-  const RouteViewPage({super.key, required this.sessionId, required this.title});
+  const RouteViewPage({super.key, required this.sessionId, required this.title, this.mode = TravelMode.mixed});
 
   @override
   State<RouteViewPage> createState() => _RouteViewPageState();
@@ -32,16 +35,21 @@ class _RouteViewPageState extends State<RouteViewPage> {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final pts = snap.data!;
           if (pts.length < 2) return const Center(child: Text('Недостаточно точек'));
-          final healCfg = AppSettings.instance.healSettings;
+          final healCfg = AppSettings.instance.healFor(widget.mode);
           final result = analyzeGaps(pts, settings: healCfg);
+          final stats = computeStats(pts, movingSpeedMs: profileOf(widget.mode).movingSpeedMs);
           return Column(children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Text(_summary(result, pts.length)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${widget.mode.label} · ${_summary(result, pts.length)}'),
+                const SizedBox(height: 4),
+                Text(_statsLine(stats), style: Theme.of(context).textTheme.bodySmall),
+              ]),
             ),
             SwitchListTile(
               title: const Text('Склеить короткие разрывы'),
-              subtitle: Text('Только пешие участки до ${healCfg.bridgeMaxMeters.round()} м. Длинные пропуски не склеиваются.'),
+              subtitle: const Text('Только участки, где движение было правдоподобным. Длинные пропуски не склеиваются.'),
               value: heal,
               onChanged: (v) => setState(() => heal = v),
             ),
@@ -58,6 +66,30 @@ class _RouteViewPageState extends State<RouteViewPage> {
         },
       ),
     );
+  }
+
+  static String _hms(int s) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(s ~/ 3600)}:${two((s ~/ 60) % 60)}:${two(s % 60)}';
+  }
+
+  String _statsLine(TrackStats s) {
+    final parts = <String>[
+      'Всего ${_hms(s.totalSeconds)}',
+      'в движении ${_hms(s.movingSeconds)}',
+      'пауза ${_hms(s.pausedSeconds)}',
+    ];
+    if (s.avgMovingSpeedMs > 0) {
+      parts.add('ср. ${(s.avgMovingSpeedMs * 3.6).toStringAsFixed(1)} км/ч');
+      final pace = s.paceMinPerKm;
+      if (pace != null && widget.mode != TravelMode.car && pace < 60) {
+        final m = pace.floor();
+        final sec = ((pace - m) * 60).round();
+        parts.add('темп $m:${sec.toString().padLeft(2, '0')} мин/км');
+      }
+    }
+    if (s.maxSpeedMs > 0) parts.add('макс. ${(s.maxSpeedMs * 3.6).toStringAsFixed(1)} км/ч');
+    return parts.join(' · ');
   }
 
   String _summary(HealResult r, int n) {
