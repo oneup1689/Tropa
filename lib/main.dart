@@ -178,8 +178,41 @@ class _HomePageState extends State<HomePage> {
     await _reload();
   }
 
+  /// Export dialog: the user chooses what goes into the GPX file.
   Future<void> _exportGpx(int id) async {
-    final f = await writeGpx(id);
+    var heal = true, withTime = true, withEle = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (c, setS) => AlertDialog(
+          title: const Text('Что включить в GPX'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            CheckboxListTile(
+              value: heal,
+              onChanged: (v) => setS(() => heal = v ?? heal),
+              title: const Text('Склеить короткие разрывы'),
+              subtitle: const Text('Только пешие участки до 150 м'),
+            ),
+            CheckboxListTile(
+              value: withTime,
+              onChanged: (v) => setS(() => withTime = v ?? withTime),
+              title: const Text('Время'),
+            ),
+            CheckboxListTile(
+              value: withEle,
+              onChanged: (v) => setS(() => withEle = v ?? withEle),
+              title: const Text('Высота'),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Отмена')),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Поделиться')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final f = await writeGpx(id, withTime: withTime, withElevation: withEle, heal: heal);
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
   }
 

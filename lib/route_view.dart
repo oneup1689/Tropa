@@ -3,38 +3,52 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'db.dart';
-import 'gpx.dart';
+import 'heal.dart';
 
 /// Simple offline preview of a recorded route (no map tiles yet):
-/// solid line where GPS was continuous, dashed where it was lost.
-class RouteViewPage extends StatelessWidget {
+/// solid line where GPS was continuous, a different colour where a short gap
+/// was restored, dashed where the gap could not be restored safely.
+class RouteViewPage extends StatefulWidget {
   final int sessionId;
   final String title;
 
   const RouteViewPage({super.key, required this.sessionId, required this.title});
 
   @override
+  State<RouteViewPage> createState() => _RouteViewPageState();
+}
+
+class _RouteViewPageState extends State<RouteViewPage> {
+  bool heal = true;
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(title: Text(widget.title)),
       body: FutureBuilder<List<TrackPoint>>(
-        future: TrackDb.instance.points(sessionId),
+        future: TrackDb.instance.points(widget.sessionId),
         builder: (context, snap) {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final pts = snap.data!;
           if (pts.length < 2) return const Center(child: Text('Недостаточно точек'));
-          final gaps = _gapCount(pts);
+          final result = analyzeGaps(pts);
           return Column(children: [
             Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text('Точек: ${pts.length} · разрывов GPS: $gaps (пунктир)'),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Text(_summary(result, pts.length)),
+            ),
+            SwitchListTile(
+              title: const Text('Склеить короткие разрывы'),
+              subtitle: const Text('Только пешие участки до 150 м. Длинные пропуски не склеиваются.'),
+              value: heal,
+              onChanged: (v) => setState(() => heal = v),
             ),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: CustomPaint(
                   size: Size.infinite,
-                  painter: _RoutePainter(pts, Theme.of(context).colorScheme),
+                  painter: _RoutePainter(pts, result, heal, Theme.of(context).colorScheme),
                 ),
               ),
             ),
@@ -44,20 +58,23 @@ class RouteViewPage extends StatelessWidget {
     );
   }
 
-  static int _gapCount(List<TrackPoint> pts) {
-    var n = 0;
-    for (var i = 1; i < pts.length; i++) {
-      if (pts[i].tsMs - pts[i - 1].tsMs > gpxGapSeconds * 1000) n++;
-    }
-    return n;
+  String _summary(HealResult r, int n) {
+    final rec = (r.recordedMeters / 1000).toStringAsFixed(2);
+    final restored = r.restoredMeters.round();
+    final parts = ['Записано: $rec км', 'точек: $n'];
+    if (restored > 0) parts.add(heal ? 'восстановлено: $restored м' : 'можно восстановить: $restored м');
+    if (r.unresolved > 0) parts.add('не склеено разрывов: ${r.unresolved} (пунктир)');
+    return parts.join(' · ');
   }
 }
 
 class _RoutePainter extends CustomPainter {
   final List<TrackPoint> pts;
+  final HealResult result;
+  final bool heal;
   final ColorScheme scheme;
 
-  _RoutePainter(this.pts, this.scheme);
+  _RoutePainter(this.pts, this.result, this.heal, this.scheme);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -84,6 +101,11 @@ class _RoutePainter extends CustomPainter {
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
+    final restored = Paint()
+      ..color = scheme.tertiary
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
     final dashed = Paint()
       ..color = scheme.error
       ..strokeWidth = 2
@@ -92,10 +114,15 @@ class _RoutePainter extends CustomPainter {
     for (var i = 1; i < pts.length; i++) {
       final a = pos(pts[i - 1]);
       final b = pos(pts[i]);
-      if (pts[i].tsMs - pts[i - 1].tsMs > gpxGapSeconds * 1000) {
-        _dash(canvas, a, b, dashed);
-      } else {
+      final gap = result.gapAt(i);
+      if (gap == null) {
         canvas.drawLine(a, b, solid);
+      } else if (heal && gap.kind == GapKind.glueStill) {
+        canvas.drawLine(a, b, solid);
+      } else if (heal && gap.kind == GapKind.bridge) {
+        canvas.drawLine(a, b, restored);
+      } else {
+        _dash(canvas, a, b, dashed);
       }
     }
     canvas.drawCircle(pos(pts.first), 8, Paint()..color = Colors.green);
@@ -112,5 +139,5 @@ class _RoutePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _RoutePainter old) => old.pts != pts;
+  bool shouldRepaint(covariant _RoutePainter old) => old.pts != pts || old.heal != heal;
 }
