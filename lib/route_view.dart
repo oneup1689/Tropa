@@ -102,7 +102,7 @@ class _RoutePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
     final restored = Paint()
-      ..color = Colors.deepOrange
+      ..color = scheme.tertiary
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
