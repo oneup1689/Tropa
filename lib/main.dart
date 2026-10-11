@@ -10,7 +10,10 @@ import 'package:share_plus/share_plus.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'gpx.dart';
+import 'package:flutter/services.dart';
+
 import 'recorder.dart';
+import 'route_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -228,6 +231,20 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final elapsed = rec.startedAt == null ? Duration.zero : DateTime.now().difference(rec.startedAt!);
+    return PopScope(
+      // While recording, "Back" only minimises the app: closing the activity can stop the recorder.
+      canPop: !rec.recording,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && Platform.isAndroid) {
+          DebugLog.instance.log('LIFECYCLE', 'Back pressed while recording -> moveTaskToBack');
+          const MethodChannel('tropa/system').invokeMethod('moveToBack');
+        }
+      },
+      child: _scaffold(context, elapsed),
+    );
+  }
+
+  Widget _scaffold(BuildContext context, Duration elapsed) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tropa'),
@@ -298,6 +315,11 @@ class _HomePageState extends State<HomePage> {
           for (final s in sessions)
             Card(
               child: ListTile(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => RouteViewPage(sessionId: s.id, title: _date(s.startMs))),
+                ),
                 title: Text(_date(s.startMs)),
                 subtitle: Text('Точек: ${s.pointCount} · ${_status(s.status)}'),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [

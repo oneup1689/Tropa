@@ -24,6 +24,9 @@ class MainActivity : FlutterActivity() {
                             "ignoringBatteryOpt" to pm.isIgnoringBatteryOptimizations(packageName)
                         )
                     )
+                } else if (call.method == "moveToBack") {
+                    moveTaskToBack(true)
+                    result.success(null)
                 } else {
                     result.notImplemented()
                 }
