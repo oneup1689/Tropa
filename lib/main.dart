@@ -189,6 +189,8 @@ class _HomePageState extends State<HomePage> {
   /// Export dialog: the user chooses what goes into the GPX file.
   Future<void> _exportGpx(int id) async {
     var heal = AppSettings.instance.healEnabled, withTime = true, withEle = true;
+    // Trimming is a Pro option, but a value set earlier keeps working in amateur mode.
+    var trimStart = AppSettings.instance.trimStartM, trimEnd = AppSettings.instance.trimEndM;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => StatefulBuilder(
@@ -211,6 +213,23 @@ class _HomePageState extends State<HomePage> {
               onChanged: (v) => setS(() => withEle = v ?? withEle),
               title: const Text('Высота'),
             ),
+            if (AppSettings.instance.pro) ...[
+              const Divider(),
+              Text('Обрезать начало: ${trimStart.round()} м'),
+              Slider(
+                value: trimStart,
+                max: 500,
+                divisions: 20,
+                onChanged: (v) => setS(() => trimStart = v),
+              ),
+              Text('Обрезать конец: ${trimEnd.round()} м'),
+              Slider(
+                value: trimEnd,
+                max: 500,
+                divisions: 20,
+                onChanged: (v) => setS(() => trimEnd = v),
+              ),
+            ],
           ]),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Отмена')),
@@ -220,7 +239,14 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     if (ok != true) return;
-    final f = await writeGpx(id, withTime: withTime, withElevation: withEle, heal: heal);
+    final f = await writeGpx(
+      id,
+      withTime: withTime,
+      withElevation: withEle,
+      heal: heal,
+      trimStartM: trimStart,
+      trimEndM: trimEnd,
+    );
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
   }
 

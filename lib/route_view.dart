@@ -81,11 +81,23 @@ class _RoutePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    void grow(double lat, double lon) {
+      minLat = math.min(minLat, lat);
+      maxLat = math.max(maxLat, lat);
+      minLon = math.min(minLon, lon);
+      maxLon = math.max(maxLon, lon);
+    }
+
     for (final p in pts) {
-      minLat = math.min(minLat, p.lat);
-      maxLat = math.max(maxLat, p.lat);
-      minLon = math.min(minLon, p.lon);
-      maxLon = math.max(maxLon, p.lon);
+      grow(p.lat, p.lon);
+    }
+    if (heal) {
+      // A smooth continuation may bulge slightly outside the recorded points.
+      for (final g in result.gaps) {
+        for (final c in g.curve) {
+          grow(c.lat, c.lon);
+        }
+      }
     }
     final midLat = (minLat + maxLat) / 2;
     final kx = math.cos(midLat * math.pi / 180); // shrink longitude with latitude
@@ -95,8 +107,9 @@ class _RoutePainter extends CustomPainter {
     final ox = (size.width - w * scale) / 2;
     final oy = (size.height - h * scale) / 2;
 
-    Offset pos(TrackPoint p) =>
-        Offset(ox + (p.lon - minLon) * kx * scale, size.height - oy - (p.lat - minLat) * scale);
+    Offset posLL(double lat, double lon) =>
+        Offset(ox + (lon - minLon) * kx * scale, size.height - oy - (lat - minLat) * scale);
+    Offset pos(TrackPoint p) => posLL(p.lat, p.lon);
 
     final solid = Paint()
       ..color = scheme.primary
@@ -122,7 +135,14 @@ class _RoutePainter extends CustomPainter {
       } else if (heal && gap.kind == GapKind.glueStill) {
         canvas.drawLine(a, b, solid);
       } else if (heal && gap.kind == GapKind.bridge) {
-        canvas.drawLine(a, b, restored);
+        // Smooth continuation of the route; a straight line when headings are unknown.
+        var prev = a;
+        for (final c in gap.curve) {
+          final next = posLL(c.lat, c.lon);
+          canvas.drawLine(prev, next, restored);
+          prev = next;
+        }
+        canvas.drawLine(prev, b, restored);
       } else {
         _dash(canvas, a, b, dashed);
       }

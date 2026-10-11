@@ -88,6 +88,32 @@ const List<SettingDef> settingDefs = [
     proOnly: true,
   ),
   SettingDef(
+    key: 'trim_start_m',
+    title: 'Обрезать начало маршрута',
+    subtitle: 'Убирает первые метры при экспорте (например, чтобы не показывать дом). Маршрут не меняется и не удлиняется.',
+    section: 'Приватность',
+    kind: SettingKind.number,
+    defaultValue: 0,
+    proOnly: true,
+    min: 0,
+    max: 500,
+    step: 25,
+    unit: 'м',
+  ),
+  SettingDef(
+    key: 'trim_end_m',
+    title: 'Обрезать конец маршрута',
+    subtitle: 'Убирает последние метры при экспорте',
+    section: 'Приватность',
+    kind: SettingKind.number,
+    defaultValue: 0,
+    proOnly: true,
+    min: 0,
+    max: 500,
+    step: 25,
+    unit: 'м',
+  ),
+  SettingDef(
     key: 'heal_bridge_max_m',
     title: 'Предел склейки пешком',
     subtitle: 'Более длинные разрывы не склеиваются прямой линией',
@@ -178,5 +204,7 @@ class AppSettings extends ChangeNotifier {
   double get maxAccuracyM => getNum('max_accuracy_m');
   int get fixIntervalMs => (getNum('fix_interval_s') * 1000).round();
   bool get healEnabled => getBool('heal_enabled');
+  double get trimStartM => getNum('trim_start_m');
+  double get trimEndM => getNum('trim_end_m');
   HealSettings get healSettings => HealSettings(bridgeMaxMeters: getNum('heal_bridge_max_m'));
 }
