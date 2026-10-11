@@ -1,121 +1,280 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:io';
 
-void main() {
-  runApp(const MyApp());
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
+
+import 'db.dart';
+import 'debug_log.dart';
+import 'gpx.dart';
+import 'recorder.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await DebugLog.instance.init();
+  FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
+  await _logDevice();
+  await Recorder.instance.init();
+  runApp(const TropaApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+Future<void> _logDevice() async {
+  try {
+    final pkg = await PackageInfo.fromPlatform();
+    final info = DeviceInfoPlugin();
+    final String dev;
+    if (Platform.isAndroid) {
+      final a = await info.androidInfo;
+      dev = '${a.manufacturer} ${a.model} Android ${a.version.release} (SDK ${a.version.sdkInt})';
+    } else {
+      final i = await info.iosInfo;
+      dev = '${i.utsname.machine} iOS ${i.systemVersion}';
+    }
+    DebugLog.instance.log('APP', 'Tropa ${pkg.version}+${pkg.buildNumber} on $dev');
+  } catch (e) {
+    DebugLog.instance.log('APP', 'device info failed: $e');
+  }
+}
 
-  // This widget is the root of your application.
+class TropaApp extends StatelessWidget {
+  const TropaApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Tropa',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorSchemeSeed: const Color(0xFF2E7D32), useMaterial3: true),
+      darkTheme: ThemeData(
+          colorSchemeSeed: const Color(0xFF2E7D32), brightness: Brightness.dark, useMaterial3: true),
+      home: const HomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _HomePageState extends State<HomePage> {
+  final rec = Recorder.instance;
+  List<SessionInfo> sessions = [];
+  Timer? _ticker;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  @override
+  void initState() {
+    super.initState();
+    rec.addListener(_onChange);
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (rec.recording) _onChange();
     });
+    _reload();
   }
 
   @override
+  void dispose() {
+    _ticker?.cancel();
+    rec.removeListener(_onChange);
+    super.dispose();
+  }
+
+  void _onChange() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _reload() async {
+    final s = await TrackDb.instance.sessions();
+    if (mounted) setState(() => sessions = s);
+  }
+
+  void _snack(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Step-by-step permissions: location -> notifications -> "always" -> battery.
+  Future<bool> _ensurePermissions() async {
+    final log = DebugLog.instance;
+    final loc = await Permission.locationWhenInUse.request();
+    log.log('PERM', 'locationWhenInUse=$loc');
+    if (!loc.isGranted) {
+      _snack('Нужен доступ к геолокации. Разрешите его в настройках приложения.');
+      if (loc.isPermanentlyDenied) await openAppSettings();
+      return false;
+    }
+    if (Platform.isAndroid) {
+      final n = await Permission.notification.request();
+      log.log('PERM', 'notification=$n');
+    }
+    var always = await Permission.locationAlways.status;
+    if (!always.isGranted) {
+      if (!mounted) return false;
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Запись при выключенном экране'),
+          content: const Text(
+              'На следующем экране выберите «Разрешить всегда» (на iPhone — «Всегда»). '
+              'Без этого запись может оборваться, когда экран погаснет.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Понятно'))],
+        ),
+      );
+      always = await Permission.locationAlways.request();
+      log.log('PERM', 'locationAlways=$always');
+    }
+    if (Platform.isAndroid) {
+      final bat = await Permission.ignoreBatteryOptimizations.status;
+      if (!bat.isGranted) {
+        final r = await Permission.ignoreBatteryOptimizations.request();
+        log.log('PERM', 'ignoreBatteryOptimizations=$r');
+      }
+    }
+    return true;
+  }
+
+  Future<void> _toggle() async {
+    if (rec.recording) {
+      await rec.stop();
+      await _reload();
+      return;
+    }
+    if (!await _ensurePermissions()) return;
+    final ok = await rec.start();
+    if (!ok) _snack('Не удалось начать запись. Включите GPS в настройках телефона.');
+    await _reload();
+  }
+
+  Future<void> _resume(SessionInfo s) async {
+    if (!await _ensurePermissions()) return;
+    await rec.start(resumeSessionId: s.id);
+    await _reload();
+  }
+
+  Future<void> _exportGpx(int id) async {
+    final f = await writeGpx(id);
+    await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
+  }
+
+  Future<void> _shareLog() async {
+    final path = DebugLog.instance.path;
+    if (path == null) return;
+    DebugLog.instance.log('LOG', 'shared by user');
+    await SharePlus.instance.share(ShareParams(files: [XFile(path)], text: 'Tropa debug log'));
+  }
+
+  static String _two(int n) => n.toString().padLeft(2, '0');
+
+  static String _fmt(Duration d) => '${_two(d.inHours)}:${_two(d.inMinutes % 60)}:${_two(d.inSeconds % 60)}';
+
+  static String _date(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${_two(d.day)}.${_two(d.month)}.${d.year} ${_two(d.hour)}:${_two(d.minute)}';
+  }
+
+  String _status(String s) => switch (s) {
+        'active' => 'идёт запись',
+        'interrupted' => 'прервана',
+        _ => 'завершена',
+      };
+
+  Widget _stat(String label, String value) => Column(children: [
+        Text(value, style: Theme.of(context).textTheme.titleMedium),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ]);
+
+  @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final elapsed = rec.startedAt == null ? Duration.zero : DateTime.now().difference(rec.startedAt!);
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Tropa'),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) async {
+              if (v == 'log') await _shareLog();
+              if (v == 'clear') {
+                await DebugLog.instance.clear();
+                _snack('Лог очищен');
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
+              PopupMenuItem(value: 'clear', child: Text('Очистить лог')),
+            ],
+          ),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (rec.interrupted != null && !rec.recording)
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                title: const Text('Прошлая запись была прервана'),
+                subtitle: Text('Сохранено точек: ${rec.interrupted!.pointCount}. Можно продолжить.'),
+                trailing: TextButton(
+                  onPressed: () => _resume(rec.interrupted!),
+                  child: const Text('Продолжить'),
+                ),
+              ),
             ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Text(rec.recording ? 'Идёт запись' : 'Запись остановлена',
+                      style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _stat('Дистанция', '${(rec.distanceM / 1000).toStringAsFixed(2)} км'),
+                      _stat('Время', rec.recording ? _fmt(elapsed) : '—'),
+                      _stat('Точки', '${rec.pointCount}'),
+                      _stat('Точность', rec.recording ? '${rec.lastAccuracy.toStringAsFixed(0)} м' : '—'),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _toggle,
+                    icon: Icon(rec.recording ? Icons.stop : Icons.play_arrow),
+                    label: Text(rec.recording ? 'Остановить' : 'Начать запись'),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text('Прогулки', style: Theme.of(context).textTheme.titleMedium),
+          if (sessions.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('Пока пусто')),
+          for (final s in sessions)
+            Card(
+              child: ListTile(
+                title: Text(_date(s.startMs)),
+                subtitle: Text('Точек: ${s.pointCount} · ${_status(s.status)}'),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(icon: const Icon(Icons.ios_share), onPressed: () => _exportGpx(s.id)),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: s.status == 'active'
+                        ? null
+                        : () async {
+                            await TrackDb.instance.deleteSession(s.id);
+                            await _reload();
+                          },
+                  ),
+                ]),
+              ),
+            ),
+        ],
       ),
     );
   }
