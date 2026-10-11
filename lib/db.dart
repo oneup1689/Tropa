@@ -37,14 +37,14 @@ class TrackDb {
       p.join(dir, 'tropa.db'),
       version: 1,
       onCreate: (db, _) async {
-        await db.execute('CREATE TABLE sessions('
+        await db.execute('CREATE TABLE IF NOT EXISTS sessions('
             'id INTEGER PRIMARY KEY AUTOINCREMENT, start_ms INTEGER NOT NULL, '
             'end_ms INTEGER, status TEXT NOT NULL)');
-        await db.execute('CREATE TABLE points('
+        await db.execute('CREATE TABLE IF NOT EXISTS points('
             'id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, '
             'ts_ms INTEGER NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, '
             'acc REAL, alt REAL, speed REAL)');
-        await db.execute('CREATE INDEX idx_points_session ON points(session_id, ts_ms)');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_points_session ON points(session_id, ts_ms)');
       },
     );
     return _db!;

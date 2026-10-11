@@ -9,34 +9,94 @@ import 'package:geolocator/geolocator.dart';
 import 'db.dart';
 import 'debug_log.dart';
 
-/// Records GPS fixes in the background and keeps a detailed debug trail.
+/// Recording facade.
+///
+/// Android: the native [TrackingService] (Kotlin) records and writes points to
+/// SQLite on its own, so the UI can be closed or swiped away. This class only
+/// starts/stops it and polls its status.
+/// iOS: records in Dart through the geolocator plugin (background location mode).
 class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   Recorder._();
   static final Recorder instance = Recorder._();
 
-  static const double _maxAccuracyM = 50; // fixes worse than this are logged but not stored
+  static const MethodChannel _sys = MethodChannel('tropa/system');
+  static const double _maxAccuracyM = 50; // iOS path only
   static const Duration _heartbeat = Duration(seconds: 30);
   static const Duration _watchdog = Duration(seconds: 90);
 
   final _log = DebugLog.instance;
   final _battery = Battery();
 
-  StreamSubscription<Position>? _sub;
-  Timer? _timer;
+  bool recording = false;
   int? sessionId;
   DateTime? startedAt;
-  DateTime? _lastFix;
-  Position? _lastStored;
   int pointCount = 0;
   double distanceM = 0;
   double lastAccuracy = 0;
-  bool get recording => sessionId != null && _sub != null;
 
-  /// Set at startup when the previous run ended without "stop" (killed by the system).
+  /// Set at startup when the previous run ended without "stop" and nothing is recording now.
   SessionInfo? interrupted;
 
-  static const _sys = MethodChannel('tropa/system');
   String? _lastModes;
+
+  // iOS-only state
+  StreamSubscription<Position>? _sub;
+  Timer? _timer;
+  DateTime? _lastFix;
+  Position? _lastStored;
+
+  // ---------------------------------------------------------------- init
+
+  Future<void> init() async {
+    WidgetsBinding.instance.addObserver(this);
+    _watchModes();
+    if (Platform.isAndroid) {
+      await _refresh();
+      Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+    }
+    if (!recording) {
+      final prev = await TrackDb.instance.activeSession();
+      if (prev != null) {
+        final last = await TrackDb.instance.lastPointTime(prev.id);
+        _log.log('RECOVERY',
+            'previous session ${prev.id} was NOT stopped properly (app killed?). points=${prev.pointCount} lastPoint=$last');
+        await TrackDb.instance.endSession(prev.id, 'interrupted');
+        interrupted = prev;
+      }
+    } else {
+      _log.log('RECOVERY', 'native service is already recording session=$sessionId, UI attached');
+    }
+    await _logEnvironment();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final m = await _sys.invokeMapMethod<String, dynamic>('trackingStatus');
+      if (m == null) return;
+      final running = m['running'] == true;
+      final id = (m['session'] as num?)?.toInt();
+      final pts = (m['points'] as num?)?.toInt() ?? 0;
+      final dist = (m['distance'] as num?)?.toDouble() ?? 0;
+      final acc = (m['accuracy'] as num?)?.toDouble() ?? 0;
+      final start = (m['startMs'] as num?)?.toInt();
+      final changed = running != recording ||
+          pts != pointCount ||
+          (dist - distanceM).abs() > 0.5 ||
+          acc != lastAccuracy;
+      recording = running;
+      sessionId = running ? id : null;
+      pointCount = pts;
+      distanceM = dist;
+      lastAccuracy = acc;
+      startedAt = running && start != null && start > 0 ? DateTime.fromMillisecondsSinceEpoch(start) : null;
+      if (running) interrupted = null;
+      if (changed) notifyListeners();
+    } catch (e) {
+      _log.log('RECORDER', 'status poll failed: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------- diagnostics
 
   /// Android system modes that explain interruptions: airplane, power saver, Doze, screen.
   Future<String> _modes() async {
@@ -55,7 +115,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   void _watchModes() {
     Timer.periodic(const Duration(seconds: 5), (_) async {
-      final now = await _modes();
+      final now = '${await _modes()} ${await _saverInfo()}';
       if (now != _lastModes) {
         _log.log('MODE', now);
         _lastModes = now;
@@ -67,18 +127,12 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
-  Future<void> init() async {
-    WidgetsBinding.instance.addObserver(this);
-    _watchModes();
-    final prev = await TrackDb.instance.activeSession();
-    if (prev != null) {
-      final last = await TrackDb.instance.lastPointTime(prev.id);
-      _log.log('RECOVERY',
-          'previous session ${prev.id} was NOT stopped properly (app killed?). points=${prev.pointCount} lastPoint=$last');
-      await TrackDb.instance.endSession(prev.id, 'interrupted');
-      interrupted = prev;
+  Future<String> _saverInfo() async {
+    try {
+      return 'batterySaver=${await _battery.isInBatterySaveMode}';
+    } catch (_) {
+      return 'batterySaver=unknown';
     }
-    await _logEnvironment();
   }
 
   Future<void> _logEnvironment() async {
@@ -102,6 +156,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  // ---------------------------------------------------------------- start / stop
+
   Future<bool> start({int? resumeSessionId}) async {
     if (recording) return true;
     if (!await Geolocator.isLocationServiceEnabled()) {
@@ -113,85 +169,83 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       _log.log('START', 'refused: permission=$perm');
       return false;
     }
+    interrupted = null;
+    _log.log('START', 'UI requested start resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
 
+    if (Platform.isAndroid) {
+      await _sys.invokeMethod('startTracking', {'session': resumeSessionId ?? 0});
+      // Give the service a moment to publish its state.
+      for (var i = 0; i < 10 && !recording; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await _refresh();
+      }
+      return recording;
+    }
+    return _startDart(resumeSessionId);
+  }
+
+  Future<void> stop() async {
+    if (Platform.isAndroid) {
+      _log.log('STOP', 'UI requested stop');
+      await _sys.invokeMethod('stopTracking');
+      for (var i = 0; i < 10 && recording; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await _refresh();
+      }
+      return;
+    }
+    await _stopDart();
+  }
+
+  // ---------------------------------------------------------------- iOS (Dart) path
+
+  Future<bool> _startDart(int? resumeSessionId) async {
     if (resumeSessionId != null) {
       sessionId = resumeSessionId;
       await TrackDb.instance.reopenSession(resumeSessionId);
       final pts = await TrackDb.instance.points(resumeSessionId);
       pointCount = pts.length;
       distanceM = _distanceOf(pts);
-      _lastStored = null;
     } else {
       sessionId = await TrackDb.instance.startSession();
       pointCount = 0;
       distanceM = 0;
-      _lastStored = null;
     }
+    _lastStored = null;
     startedAt = DateTime.now();
     _lastFix = DateTime.now();
-    interrupted = null;
-    _log.log('START', 'session=$sessionId resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
-
-    _subscribe();
-    _timer?.cancel();
-    _timer = Timer.periodic(_heartbeat, (_) => _tick());
-    notifyListeners();
-    return true;
-  }
-
-  void _subscribe() {
+    recording = true;
     _sub?.cancel();
-    final LocationSettings settings;
-    if (Platform.isAndroid) {
-      settings = AndroidSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 3,
-        intervalDuration: const Duration(seconds: 2),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Tropa записывает маршрут',
-          notificationText: 'GPS работает в фоне',
-          enableWakeLock: true,
-          setOngoing: true,
-        ),
-      );
-    } else {
-      settings = AppleSettings(
+    _sub = Geolocator.getPositionStream(
+      locationSettings: AppleSettings(
         accuracy: LocationAccuracy.best,
         activityType: ActivityType.fitness,
         distanceFilter: 3,
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true,
         allowBackgroundLocationUpdates: true,
-      );
-    }
-    _sub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      ),
+    ).listen(
       _onPosition,
       onError: (Object e, StackTrace s) => _log.log('STREAM', 'ERROR: $e'),
       onDone: () => _log.log('STREAM', 'stream closed by system (onDone)'),
     );
-    _log.log('STREAM', 'subscribed');
+    _timer?.cancel();
+    _timer = Timer.periodic(_heartbeat, (_) => _tick());
+    notifyListeners();
+    return true;
   }
 
   Future<void> _onPosition(Position p) async {
-    final now = DateTime.now();
-    final gap = _lastFix == null ? 0 : now.difference(_lastFix!).inSeconds;
-    _lastFix = now;
+    _lastFix = DateTime.now();
     lastAccuracy = p.accuracy;
-
-    if (gap >= 20) _log.log('GAP', 'no fixes for ${gap}s before this one');
-
-    final stored = p.accuracy <= _maxAccuracyM && !p.isMocked;
-    _log.log(
-      'FIX',
-      '${p.latitude.toStringAsFixed(6)},${p.longitude.toStringAsFixed(6)} '
-      'acc=${p.accuracy.toStringAsFixed(1)} alt=${p.altitude.toStringAsFixed(1)} '
-      'spd=${p.speed.toStringAsFixed(2)} mock=${p.isMocked} ${stored ? 'stored' : 'SKIPPED'}',
-    );
-    if (!stored || sessionId == null) {
+    final ok = p.accuracy <= _maxAccuracyM && !p.isMocked;
+    _log.log('FIX',
+        '${p.latitude.toStringAsFixed(6)},${p.longitude.toStringAsFixed(6)} acc=${p.accuracy.toStringAsFixed(1)} ${ok ? 'stored' : 'SKIPPED'}');
+    if (!ok || sessionId == null) {
       notifyListeners();
       return;
     }
-
     if (_lastStored != null) {
       distanceM += Geolocator.distanceBetween(
           _lastStored!.latitude, _lastStored!.longitude, p.latitude, p.longitude);
@@ -207,16 +261,14 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _tick() async {
     final since = _lastFix == null ? -1 : DateTime.now().difference(_lastFix!).inSeconds;
-    _log.log('BEAT', 'points=$pointCount dist=${distanceM.toStringAsFixed(0)}m sinceLastFix=${since}s ${await _batteryInfo()} ${await _modes()}');
-    // Watchdog: GPS silently stopped delivering fixes — try to resubscribe.
+    _log.log('BEAT', 'ios points=$pointCount dist=${distanceM.toStringAsFixed(0)}m sinceLastFix=${since}s ${await _batteryInfo()}');
     if (_lastFix != null && DateTime.now().difference(_lastFix!) > _watchdog) {
-      _log.log('WATCHDOG', 'no fixes for >${_watchdog.inSeconds}s, resubscribing');
+      _log.log('WATCHDOG', 'no fixes for >${_watchdog.inSeconds}s');
       _lastFix = DateTime.now();
-      _subscribe();
     }
   }
 
-  Future<void> stop() async {
+  Future<void> _stopDart() async {
     final id = sessionId;
     if (id == null) return;
     await _sub?.cancel();
@@ -224,8 +276,9 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _timer?.cancel();
     _timer = null;
     await TrackDb.instance.endSession(id, 'finished');
-    _log.log('STOP', 'session=$id points=$pointCount dist=${distanceM.toStringAsFixed(0)}m ${await _batteryInfo()}');
+    _log.log('STOP', 'session=$id points=$pointCount dist=${distanceM.toStringAsFixed(0)}m');
     sessionId = null;
+    recording = false;
     notifyListeners();
   }
 

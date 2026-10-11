@@ -129,6 +129,26 @@ class _HomePageState extends State<HomePage> {
       );
       always = await Permission.locationAlways.request();
       log.log('PERM', 'locationAlways=$always');
+      if (!always.isGranted && mounted) {
+        // Android 11+ only grants "Always" from the system settings screen.
+        final open = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Включите «Разрешить всегда»'),
+            content: const Text(
+                'Откроются настройки приложения: Разрешения → Местоположение → «Разрешить всегда» '
+                '(и «Точное местоположение»). Затем вернитесь в Tropa.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Позже')),
+              TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Открыть настройки')),
+            ],
+          ),
+        );
+        if (open == true) {
+          await openAppSettings();
+          return false;
+        }
+      }
     }
     if (Platform.isAndroid) {
       final bat = await Permission.ignoreBatteryOptimizations.status;
