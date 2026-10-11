@@ -58,6 +58,47 @@ const List<SettingDef> settingDefs = [
     options: [('system', 'Как на смартфоне'), ('light', 'Светлая'), ('dark', 'Тёмная')],
   ),
   SettingDef(
+    key: 'auto_mode',
+    title: 'Автозапись 24/7',
+    subtitle: 'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. '
+        'В остальное время GPS выключен и батарея почти не тратится.',
+    section: 'Автоматическая запись',
+    kind: SettingKind.toggle,
+    defaultValue: false,
+  ),
+  SettingDef(
+    key: 'day_split',
+    title: 'Как делить на прогулки',
+    subtitle: 'По паузе: новая прогулка после остановки движения. По полуночи: каждый день отдельный файл',
+    section: 'Автоматическая запись',
+    kind: SettingKind.choice,
+    defaultValue: 'idle',
+    proOnly: true,
+    options: [('idle', 'По паузе'), ('midnight', 'По полуночи')],
+  ),
+  SettingDef(
+    key: 'idle_minutes',
+    title: 'Пауза, после которой запись заканчивается',
+    section: 'Автоматическая запись',
+    kind: SettingKind.number,
+    defaultValue: 5,
+    proOnly: true,
+    min: 2,
+    max: 30,
+    step: 1,
+    unit: 'мин',
+  ),
+  SettingDef(
+    key: 'offroute',
+    title: 'Чувствительность «вы сошли с маршрута»',
+    subtitle: 'Строгая — предупреждение при отклонении от 25 м, свободная — от 70 м',
+    section: 'Навигация',
+    kind: SettingKind.choice,
+    defaultValue: 'normal',
+    proOnly: true,
+    options: [('strict', 'Строгая'), ('normal', 'Обычная'), ('free', 'Свободная')],
+  ),
+  SettingDef(
     key: 'max_accuracy_m',
     title: 'Порог точности GPS',
     subtitle: 'Точки с худшей точностью не записываются',
@@ -193,6 +234,9 @@ class AppSettings extends ChangeNotifier {
 
   Object? _raw(String key) => _values[key] ?? _def(key)?.defaultValue;
 
+  /// Stored value without defaults, for data that is not a user setting (planned trips).
+  Object? raw(String key) => _values[key];
+
   bool getBool(String key) => _raw(key) == true;
   String getString(String key) => (_raw(key) ?? '').toString();
   double getNum(String key) => (_raw(key) as num?)?.toDouble() ?? 0;
@@ -226,6 +270,16 @@ class AppSettings extends ChangeNotifier {
   }
 
   bool get autoPause => getBool('autopause');
+  bool get autoMode => getBool('auto_mode');
+  bool get splitAtMidnight => getString('day_split') == 'midnight';
+  int get idleMinutes => getNum('idle_minutes').round();
+
+  /// Base off-route distance in metres; the service raises it to 2x the current GPS accuracy.
+  double get offRouteMeters => switch (getString('offroute')) {
+        'strict' => 25,
+        'free' => 70,
+        _ => 40,
+      };
   TravelMode get travelMode => TravelModeInfo.parse(_values['travel_mode'] as String?);
   Future<void> setTravelMode(TravelMode m) => set('travel_mode', m.code);
 

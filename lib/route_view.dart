@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:gal/gal.dart';
 
+import 'altitude.dart';
 import 'db.dart';
 import 'heal.dart';
 import 'modes.dart';
@@ -44,7 +46,8 @@ class _RouteViewPageState extends State<RouteViewPage> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${widget.mode.label} · ${_summary(result, pts.length)}'),
                 const SizedBox(height: 4),
-                Text(_statsLine(stats), style: Theme.of(context).textTheme.bodySmall),
+                Text(_statsLine(stats, elevationStats(fusedAltitude(pts))),
+                    style: Theme.of(context).textTheme.bodySmall),
               ]),
             ),
             SwitchListTile(
@@ -62,6 +65,30 @@ class _RouteViewPageState extends State<RouteViewPage> {
                 ),
               ),
             ),
+            FutureBuilder<List<TrackNote>>(
+              future: TrackDb.instance.notes(widget.sessionId),
+              builder: (context, ns) {
+                final notes = ns.data ?? const <TrackNote>[];
+                if (notes.isEmpty) return const SizedBox.shrink();
+                return SizedBox(
+                  height: math.min(notes.length, 3) * 64.0,
+                  child: ListView(children: [
+                    for (final n in notes)
+                      ListTile(
+                        dense: true,
+                        leading: Icon(n.mediaType == 'video'
+                            ? Icons.videocam
+                            : (n.mediaType == 'photo' ? Icons.photo : Icons.sticky_note_2)),
+                        title: Text(n.text.isEmpty ? (n.mediaType == 'video' ? 'Видео' : 'Фото') : n.text),
+                        subtitle: Text(n.mediaName.isEmpty ? '' : 'В галерее, альбом Tropa: ${n.mediaName}'),
+                        trailing: n.mediaName.isEmpty
+                            ? null
+                            : IconButton(icon: const Icon(Icons.open_in_new), onPressed: Gal.open),
+                      ),
+                  ]),
+                );
+              },
+            ),
           ]);
         },
       ),
@@ -73,7 +100,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
     return '${two(s ~/ 3600)}:${two((s ~/ 60) % 60)}:${two(s % 60)}';
   }
 
-  String _statsLine(TrackStats s) {
+  String _statsLine(TrackStats s, ElevationStats e) {
     final parts = <String>[
       'Всего ${_hms(s.totalSeconds)}',
       'в движении ${_hms(s.movingSeconds)}',
@@ -89,6 +116,9 @@ class _RouteViewPageState extends State<RouteViewPage> {
       }
     }
     if (s.maxSpeedMs > 0) parts.add('макс. ${(s.maxSpeedMs * 3.6).toStringAsFixed(1)} км/ч');
+    if (e.gain > 0 || e.loss > 0) {
+      parts.add('↑${e.gain.round()} м ↓${e.loss.round()} м (${e.min.round()}…${e.max.round()} м)');
+    }
     return parts.join(' · ');
   }
 

@@ -8,21 +8,31 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
-import 'db.dart';
-import 'debug_log.dart';
-import 'gpx.dart';
-import 'modes.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 
+import 'backup.dart';
+import 'db.dart';
+import 'debug_log.dart';
+import 'geoid.dart';
+import 'gpx.dart';
+import 'map_page.dart';
+import 'maps_page.dart';
+import 'modes.dart';
+import 'notes.dart';
+import 'planner_page.dart';
 import 'recorder.dart';
 import 'route_view.dart';
+import 'routes_page.dart';
 import 'settings.dart';
 import 'settings_page.dart';
+import 'share_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DebugLog.instance.init();
   await AppSettings.instance.load();
+  await Geoid.instance.load();
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
   await _logDevice();
   await Recorder.instance.init();
@@ -83,8 +93,12 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     rec.addListener(_onChange);
+    var tick = 0;
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (rec.recording) _onChange();
+      if (!rec.recording) return;
+      _onChange();
+      // Keep the list (point counts, the new walk) fresh while a recording is running.
+      if (++tick % 5 == 0) _reload();
     });
     _reload();
   }
@@ -251,6 +265,66 @@ class _HomePageState extends State<HomePage> {
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
   }
 
+  Future<void> _newNote() async {
+    final saved = await showNoteSheet(context);
+    if (saved) _snack('Заметка сохранена');
+  }
+
+  /// Opens the imported routes; if the user picks "go along this route", the recording starts with
+  /// off-route warnings.
+  Future<void> _openRoutes() async {
+    final routeId = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => const RoutesPage()));
+    if (routeId == null || !mounted) return;
+    if (rec.recording) {
+      _snack('Сначала остановите текущую запись');
+      return;
+    }
+    if (!await _ensurePermissions()) return;
+    final ok = await rec.start(routeId: routeId);
+    _snack(ok ? 'Запись идёт по выбранному маршруту' : 'Не удалось начать запись');
+    await _reload();
+  }
+
+  Future<void> _backup() async {
+    _snack('Готовлю резервную копию…');
+    try {
+      final r = await exportBackup();
+      await SharePlus.instance.share(ShareParams(files: [XFile(r.file.path)], text: 'Tropa — резервная копия'));
+      _snack('Копия: прогулок ${r.sessions}, точек ${r.points}');
+    } catch (e) {
+      DebugLog.instance.log('BACKUP', 'export failed: $e');
+      _snack('Не удалось создать копию: $e');
+    }
+  }
+
+  Future<void> _restore() async {
+    final picked = await FilePicker.pickFiles(type: FileType.any);
+    final path = picked.firstOrNull?.path;
+    if (path == null) return;
+    try {
+      final r = await importBackup(File(path));
+      _snack('Восстановлено прогулок: ${r.sessions}, пропущено повторов: ${r.skipped}, заметок: ${r.notes}, маршрутов: ${r.routes}');
+      await _reload();
+    } catch (e) {
+      DebugLog.instance.log('BACKUP', 'import failed: $e');
+      _snack('Не удалось восстановить: $e');
+    }
+  }
+
+  /// Picture without a map background (works even without a downloaded map).
+  Future<void> _imageWithoutMap(SessionInfo s) async {
+    final options = await askShareOptions(context);
+    if (options == null || !mounted) return;
+    final pts = await TrackDb.instance.points(s.id);
+    await shareRouteImage(
+      title: _date(s.startMs),
+      pts: pts,
+      mode: TravelModeInfo.parse(s.mode),
+      options: options,
+      fileName: 'tropa_${s.id}',
+    );
+  }
+
   /// Quick notes for the test walk: what the user did with the phone and when.
   Future<void> _addMark() async {
     const presets = [
@@ -339,9 +413,22 @@ class _HomePageState extends State<HomePage> {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) async {
+              final nav = Navigator.of(context);
               if (v == 'settings') {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()));
+                await nav.push(MaterialPageRoute(builder: (_) => const SettingsPage()));
               }
+              if (v == 'maps') {
+                await nav.push(MaterialPageRoute(builder: (_) => const MapsPage()));
+              }
+              if (v == 'openmap') {
+                await nav.push(MaterialPageRoute(builder: (_) => const MapPage()));
+              }
+              if (v == 'routes') await _openRoutes();
+              if (v == 'planner') {
+                await nav.push(MaterialPageRoute(builder: (_) => const PlannerPage()));
+              }
+              if (v == 'backup') await _backup();
+              if (v == 'restore') await _restore();
               if (v == 'mark') await _addMark();
               if (v == 'log') await _shareLog();
               if (v == 'clear') {
@@ -351,6 +438,12 @@ class _HomePageState extends State<HomePage> {
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'settings', child: Text('Настройки')),
+              PopupMenuItem(value: 'openmap', child: Text('Открыть карту')),
+              PopupMenuItem(value: 'maps', child: Text('Карты (загрузка)')),
+              PopupMenuItem(value: 'routes', child: Text('Маршруты (импорт GPX)')),
+              PopupMenuItem(value: 'planner', child: Text('Планировщик')),
+              PopupMenuItem(value: 'backup', child: Text('Резервная копия')),
+              PopupMenuItem(value: 'restore', child: Text('Восстановить из копии')),
               PopupMenuItem(value: 'mark', child: Text('Добавить метку в лог')),
               PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
               PopupMenuItem(value: 'clear', child: Text('Очистить лог')),
@@ -372,6 +465,31 @@ class _HomePageState extends State<HomePage> {
                   onPressed: Geolocator.openLocationSettings,
                   child: const Text('Включить'),
                 ),
+              ),
+            ),
+          if (rec.watching && !rec.recording)
+            Card(
+              color: rec.motionSensor == 'none' ? Theme.of(context).colorScheme.errorContainer : null,
+              child: ListTile(
+                leading: Icon(rec.motionSensor == 'none' ? Icons.warning_amber : Icons.hearing),
+                title: const Text('Автозапись 24/7 включена'),
+                subtitle: Text(rec.motionSensor == 'none'
+                    ? 'На этом телефоне нет датчика шагов или движения: автозапись не заметит, что вы пошли. '
+                        'Запускайте запись кнопкой.'
+                    : 'Жду движения: GPS выключен. Запись начнётся сама.'),
+              ),
+            ),
+          if (rec.recording && rec.offRouteMeters >= 0)
+            Card(
+              color: rec.offRouteMeters > AppSettings.instance.offRouteMeters
+                  ? Theme.of(context).colorScheme.errorContainer
+                  : Theme.of(context).colorScheme.secondaryContainer,
+              child: ListTile(
+                leading: const Icon(Icons.navigation),
+                title: Text(rec.offRouteMeters > AppSettings.instance.offRouteMeters
+                    ? 'Вы в ${rec.offRouteMeters.round()} м от маршрута'
+                    : 'Вы на маршруте'),
+                subtitle: Text('Расстояние до линии: ${rec.offRouteMeters.round()} м'),
               ),
             ),
           if (rec.interrupted != null && !rec.recording)
@@ -399,7 +517,7 @@ class _HomePageState extends State<HomePage> {
                     for (final m in TravelMode.values)
                       ChoiceChip(
                         label: Text(m.label),
-                        selected: AppSettings.instance.travelMode == m,
+                        selected: (rec.recording ? rec.activeMode : AppSettings.instance.travelMode) == m,
                         onSelected: rec.recording ? null : (_) async {
                           await AppSettings.instance.setTravelMode(m);
                           if (mounted) setState(() {});
@@ -431,6 +549,36 @@ class _HomePageState extends State<HomePage> {
                     label: Text(rec.recording ? 'Остановить' : 'Начать запись'),
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
                   ),
+                  if (rec.recording) ...[
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _newNote,
+                          icon: const Icon(Icons.edit_note),
+                          label: const Text('Заметка'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => MapPage(
+                                sessionId: rec.sessionId,
+                                live: true,
+                                title: 'Живая карта',
+                                mode: AppSettings.instance.travelMode,
+                              ),
+                            ),
+                          ),
+                          icon: const Icon(Icons.map),
+                          label: const Text('Живая карта'),
+                        ),
+                      ),
+                    ]),
+                  ],
                 ],
               ),
             ),
@@ -453,18 +601,32 @@ class _HomePageState extends State<HomePage> {
                 title: Text(_date(s.startMs)),
                 subtitle: Text(
                     '${TravelModeInfo.parse(s.mode).label} · точек: ${s.pointCount} · ${_status(s.status)}'),
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  IconButton(icon: const Icon(Icons.ios_share), onPressed: () => _exportGpx(s.id)),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: s.status == 'active'
-                        ? null
-                        : () async {
-                            await TrackDb.instance.deleteSession(s.id);
-                            await _reload();
-                          },
-                  ),
-                ]),
+                trailing: PopupMenuButton<String>(
+                  onSelected: (v) async {
+                    final mode = TravelModeInfo.parse(s.mode);
+                    if (v == 'map') {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MapPage(sessionId: s.id, title: _date(s.startMs), mode: mode),
+                        ),
+                      );
+                    } else if (v == 'image') {
+                      await _imageWithoutMap(s);
+                    } else if (v == 'gpx') {
+                      await _exportGpx(s.id);
+                    } else if (v == 'delete' && s.status != 'active') {
+                      await TrackDb.instance.deleteSession(s.id);
+                      await _reload();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'map', child: Text('На карте')),
+                    PopupMenuItem(value: 'image', child: Text('Картинка без карты')),
+                    PopupMenuItem(value: 'gpx', child: Text('Файл GPX')),
+                    PopupMenuItem(value: 'delete', child: Text('Удалить')),
+                  ],
+                ),
               ),
             ),
         ],

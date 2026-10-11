@@ -56,3 +56,6 @@ test/*.txt
 *.gpx
 
 hs_err_pid*.log
+
+# large map data and tools
+data/

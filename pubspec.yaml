@@ -43,6 +43,12 @@ dependencies:
   battery_plus: ^7.1.2
   device_info_plus: ^13.3.0
   package_info_plus: ^10.2.2
+  maplibre_gl: ^0.27.1
+  archive: ^4.5.1
+  file_picker: ^13.1.0
+  image_picker: ^1.2.4
+  gal: ^2.3.3
+  xml: ^7.1.0
 
 dev_dependencies:
   flutter_test:
@@ -65,6 +71,13 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/geoid/
+    - assets/map/
+    - assets/map/fonts/Noto Sans Regular/
+    - assets/map/fonts/Noto Sans Medium/
+    - assets/map/fonts/Noto Sans Italic/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'altitude.dart';
 import 'db.dart';
 import 'heal.dart';
 import 'modes.dart';
@@ -28,6 +29,8 @@ Future<File> writeGpx(
 }) async {
   final all = await TrackDb.instance.points(sessionId);
   final pts = trimEnds(all, trimStartM, trimEndM);
+  // Sea-level altitude (barometer anchored to geoid-corrected GPS) instead of raw ellipsoidal heights.
+  final alts = fusedAltitude(pts);
   final mode = TravelModeInfo.parse(await TrackDb.instance.sessionMode(sessionId));
   final result = analyzeGaps(pts, settings: AppSettings.instance.healFor(mode));
   final b = StringBuffer()
@@ -64,7 +67,7 @@ Future<File> writeGpx(
           writePoint(
             gap.curve[c].lat,
             gap.curve[c].lon,
-            prev.altitude + (pt.altitude - prev.altitude) * f,
+            alts[i - 1] + (alts[i] - alts[i - 1]) * f,
             (prev.tsMs + (pt.tsMs - prev.tsMs) * f).round(),
           );
         }
@@ -75,7 +78,7 @@ Future<File> writeGpx(
       b.writeln('<trkseg>');
       open = true;
     }
-    writePoint(pt.lat, pt.lon, pt.altitude, pt.tsMs);
+    writePoint(pt.lat, pt.lon, alts[i], pt.tsMs);
   }
   if (open) b.writeln('</trkseg>');
   b.writeln('</trk></gpx>');

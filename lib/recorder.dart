@@ -5,6 +5,7 @@ import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart' show Permission, PermissionActions;
 
 import 'db.dart';
 import 'debug_log.dart';
@@ -44,6 +45,20 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   int movingSeconds = 0;
   bool autoPaused = false;
 
+  /// 24/7 mode: the service waits for movement. Last known position and the distance to the
+  /// loaded route (-1 when there is no route) come from the native service.
+  bool watching = false;
+
+  /// What 24/7 mode uses to notice movement: "steps", "significant" or "none" (no suitable sensor).
+  String motionSensor = 'none';
+
+  /// Travel mode of the recording that is running now (it may differ from the chip chosen in the UI,
+  /// e.g. when the planner started the walk).
+  TravelMode activeMode = TravelMode.mixed;
+  double lastLat = 0;
+  double lastLon = 0;
+  double offRouteMeters = -1;
+
   /// Set at startup when the previous run ended without "stop" and nothing is recording now.
   SessionInfo? interrupted;
 
@@ -63,6 +78,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     if (Platform.isAndroid) {
       await _refresh();
       Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+      // 24/7 survives the app being closed; re-assert it in case the process was restarted.
+      if (AppSettings.instance.autoMode) await applyAutoMode();
     }
     if (!recording) {
       final prev = await TrackDb.instance.activeSession();
@@ -106,9 +123,18 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       final timeChanged = movingSec != movingSeconds || paused != autoPaused;
       movingSeconds = movingSec;
       autoPaused = paused;
+      final isWatching = m['watching'] == true;
+      final nav = (m['offRoute'] as num?)?.toDouble() ?? -1;
+      final posChanged = isWatching != watching || (nav - offRouteMeters).abs() > 1;
+      watching = isWatching;
+      motionSensor = (m['motionSensor'] as String?) ?? 'none';
+      activeMode = TravelModeInfo.parse(m['mode'] as String?);
+      lastLat = (m['lat'] as num?)?.toDouble() ?? 0;
+      lastLon = (m['lon'] as num?)?.toDouble() ?? 0;
+      offRouteMeters = nav;
       startedAt = running && start != null && start > 0 ? DateTime.fromMillisecondsSinceEpoch(start) : null;
       if (running) interrupted = null;
-      if (changed || timeChanged) notifyListeners();
+      if (changed || timeChanged || posChanged) notifyListeners();
     } catch (e) {
       _log.log('RECORDER', 'status poll failed: $e');
     }
@@ -184,7 +210,38 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------------------------------------------------------------- start / stop
 
-  Future<bool> start({int? resumeSessionId, TravelMode? chosenMode}) async {
+  /// Parameters the native service needs; the same set is used for manual starts and 24/7 mode.
+  Map<String, Object?> _serviceArgs(TravelMode mode, {int? session, int? routeId}) => {
+        'session': session ?? 0,
+        'maxAccuracy': AppSettings.instance.maxAccuracyM,
+        'intervalMs': AppSettings.instance.fixIntervalMsFor(mode),
+        'mode': mode.code,
+        'jumpSpeed': profileOf(mode).jumpSpeedMs,
+        'movingSpeed': profileOf(mode).movingSpeedMs,
+        'autoPause': AppSettings.instance.autoPause,
+        'splitMidnight': AppSettings.instance.splitAtMidnight,
+        'idleMinutes': AppSettings.instance.idleMinutes,
+        'offRouteM': AppSettings.instance.offRouteMeters,
+        'routeId': routeId ?? 0,
+      };
+
+  /// Applies the "Автозапись 24/7" setting: starts or stops the movement watcher.
+  /// The step counter needs the "physical activity" permission.
+  Future<void> applyAutoMode() async {
+    if (!Platform.isAndroid) return;
+    if (AppSettings.instance.autoMode) {
+      final perm = await Permission.activityRecognition.request();
+      _log.log('PERM', 'activityRecognition=$perm');
+      await _sys.invokeMethod('watch', _serviceArgs(TravelMode.mixed));
+      _log.log('AUTO', 'UI enabled 24/7 mode');
+    } else {
+      await _sys.invokeMethod('unwatch');
+      _log.log('AUTO', 'UI disabled 24/7 mode');
+    }
+    await _refresh();
+  }
+
+  Future<bool> start({int? resumeSessionId, TravelMode? chosenMode, int? routeId}) async {
     if (recording) return true;
     // A resumed walk keeps the mode it was recorded in.
     final mode = resumeSessionId != null
@@ -203,15 +260,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _log.log('START', 'UI requested start resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
 
     if (Platform.isAndroid) {
-      await _sys.invokeMethod('startTracking', {
-        'session': resumeSessionId ?? 0,
-        'maxAccuracy': AppSettings.instance.maxAccuracyM,
-        'intervalMs': AppSettings.instance.fixIntervalMsFor(mode),
-        'mode': mode.code,
-        'jumpSpeed': profileOf(mode).jumpSpeedMs,
-        'movingSpeed': profileOf(mode).movingSpeedMs,
-        'autoPause': AppSettings.instance.autoPause,
-      });
+      await _sys.invokeMethod('startTracking', _serviceArgs(mode, session: resumeSessionId, routeId: routeId));
       // Give the service a moment to publish its state.
       for (var i = 0; i < 10 && !recording; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 200));

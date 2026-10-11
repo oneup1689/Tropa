@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'recorder.dart';
 import 'settings.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -79,7 +80,10 @@ class SettingsPage extends StatelessWidget {
           title: Text(d.title),
           subtitle: d.subtitle.isEmpty ? null : Text(d.subtitle),
           value: s.getBool(d.key),
-          onChanged: (v) => s.set(d.key, v),
+          onChanged: (v) async {
+            await s.set(d.key, v);
+            if (d.key == 'auto_mode') await Recorder.instance.applyAutoMode();
+          },
         );
       case SettingKind.choice:
         return ListTile(

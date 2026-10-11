@@ -12,11 +12,19 @@
 - git/gh: аккаунт oneup1689; в этой папке локально настроен user.name/email.
 - iOS: сборка только через GitHub Actions (macOS runner), подпись бесплатным Apple ID через SideStore/Sideloadly, 7 дней; TestFlight — 99 $/год. Проверить поддержку iOS 27 в SideStore до iOS-этапа.
 
-## Архитектура сейчас (MVP, технический)
-`lib/recorder.dart` (geolocator foreground service, watchdog, восстановление после убийства), `db.dart` (sqflite, каждая точка пишется сразу), `debug_log.dart` (лог на диск с flush), `gpx.dart` (разрыв >30 с = новый trkseg, прямых линий через пропуски нет), `route_view.dart` (предпросмотр без карты), `MainActivity.kt` (канал `tropa/system`: режимы Android, moveToBack).
+## Архитектура (актуально на 2026-10-11, версия «всё в одном APK»)
+**Android, нативная часть (Kotlin)** — единственный, кто пишет точки в SQLite:
+- `TrackingService.kt` — foreground-сервис с состояниями IDLE / WATCH / PROBE / RECORD. Запись GPS (LocationManager), фильтры по режиму, автопауза, барометр (давление в `points.pressure`), разбиение по полуночи, автозапись 24/7 (датчик шагов → пробный GPS → подтверждение смещением ≥30 м → сессия; конец после N мин без движения), навигация по импортированному маршруту (`route_points`, расстояние до отрезка, предупреждение «сошли с маршрута»), тревоги (GPS выключен с задержкой 10 с, перезапуск системой).
+- `PlannerReceiver.kt` — будильники планировщика (напоминание + автостарт), `BootReceiver.kt` — восстановление после перезагрузки, `MainActivity.kt` — канал `tropa/system`.
+**Dart:** `recorder.dart` (фасад, опрос статуса раз в секунду; на iOS запись идёт в Dart через geolocator), `db.dart` (sqflite v3: sessions/points/notes/routes/route_points), `heal.dart` (склейка разрывов, плавная кривая Эрмита), `stats.dart`, `altitude.dart` + `geoid.dart` (барометр + поправка геоида EGM96), `modes.dart`, `settings.dart`/`settings_page.dart` (реестр настроек, Любитель/Профи), `notes.dart` (заметки; фото/видео в галерею через `gal`), `routes.dart`/`routes_page.dart` (импорт GPX), `backup.dart` (zip: data.json + GPX), `maps.dart`/`map_page.dart`/`maps_page.dart` (MapLibre + .pmtiles), `planner_page.dart`, `share_image.dart`/`share_dialog.dart` (картинка 1080x1920), `trim.dart` (обрезка концов при экспорте).
+
+## Карты и данные (не в Git, папка `data/`)
+- `data/maps/vietnam.pmtiles` (470 МБ, Protomaps, bbox 102.1,8.3,109.6,23.5, maxzoom 14) — получен утилитой `data/tools/pmtiles.exe extract https://build.protomaps.com/<дата>.pmtiles ...`. Телефон ищет карты в `Android/data/app.tropa.tropa/files/maps/`.
+- Стили `assets/map/style_{light,dark}.json` сгенерированы `data/assets-src/make_styles.mjs` (npm @protomaps/basemaps), шрифты — `assets/map/fonts` (из protomaps/basemaps-assets), геоид — `assets/geoid/egm96_half_deg.bin` (из PROJ CDN `us_nga_egm96_15.tif`, конвертер `data/assets-src/egm_convert.py`).
+- Attribution обязателен: © OpenStreetMap, Protomaps.
 
 ## Известные решения
-- Запись должна жить независимо от UI: план — нативный Kotlin foreground service с записью в SQLite (см. анализ тестовой прогулки 2026-10-11: 5 разрывов за 57 мин).
+- Запись живёт независимо от UI (нативный сервис) — реализовано.
 - Подложки карт: только легальные оффлайн-источники (OSM-векторные тайлы, топо, спутник EOX/Esri по лицензии). Google/Яндекс/2ГИС тайлы кэшировать офлайн нельзя по их условиям.
 - Планировщик прогулок («предстартовый чек-лист») — после карт.
 
@@ -28,3 +36,10 @@
 - Зона приватности при шаринге — пока не делаем.
 - Порядок: 1) режимы+авторежим 24/7+автопауза+ежедневное разбиение; 2) барометр; 3) карты; 4) заметки; 5) импорт GPX и навигация; 6) бэкап; 7) картинка для рилс; 8) iOS.
 - Личные данные (GPX/логи прогулок) не коммитить: test/*.gpx, test/*.txt в .gitignore.
+
+## Проверка на эмуляторе (2026-10-11/12) — что подтверждено, что нет
+Эмулятор Pixel_5 (Android 16), запуск `emulator -avd Pixel_5 -gpu host -memory 1536`. **Важно: с `-gpu swiftshader_indirect` MapLibre не рисует текст (подписи на карте) — это дефект эмулятора, не приложения.** Скриншоты: `adb exec-out screencap -p`, GPS: `adb emu geo fix <lon> <lat>` (скрипт подачи точек из GPX — в scratchpad `feed_gps.ps1`), тестовая база для эмулятора собирается из GPX скриптом `make_test_db.py` и кладётся `run-as app.tropa.tropa` в `databases/tropa.db`. Тестовые GPX/логи в Git не попадают.
+Подтверждено: нативная запись, барометр, автопауза, перезапуск сервиса после kill -9 (в той же прогулке), подхват записи после смерти UI, заметка (текст), карта офлайн с подписями (pmtiles + шрифты), маршрут/склейка/заметки слоями стиля, картинка для соцсетей со снимком карты (MapSnapshotter читает стиль из ФАЙЛА — всё рисуемое должно быть слоями стиля, не аннотациями), резервная копия и восстановление, навигация «сошли с маршрута» (сработала на 116 м), планировщик (будильник → автостарт), экран настроек, режимы Любитель/Профи.
+НЕ проверено (нужен телефон): датчик шагов и автозапись 24/7 (на эмуляторе нет датчика), фото/видео в галерею (камера), реальное расходование батареи, автостарт записи будильником из фона на Xiaomi/HyperOS, импорт карты через «Добавить карту» (копия файла 470 МБ через системный выбор файлов), iOS (вообще не собирался).
+Защиты: «телепорт» (скачок быстрее 3x предела скорости режима) не добавляет дистанцию; недостающие диапазоны глифов шрифтов заменяются пустыми файлами (иначе MapLibre ждёт их вечно).
+Карты на телефоне: копировать `.pmtiles` в `Android/data/app.tropa.tropa/files/maps/` (или «Карты» → «Добавить карту»). Вьетнам: `data/maps/vietnam.pmtiles` (470 МБ).

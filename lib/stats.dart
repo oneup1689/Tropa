@@ -44,6 +44,11 @@ TrackStats computeStats(List<TrackPoint> pts, {double movingSpeedMs = 0.5, int g
       continue;
     }
     final d = haversine(a.lat, a.lon, b.lat, b.lon);
+    if (d / dt > 100) {
+      // Faster than 360 km/h: a position jump, not travel. Treated like a gap.
+      gap += dt;
+      continue;
+    }
     if (d / dt >= movingSpeedMs && d >= 2) {
       moving += dt;
       dist += d;
