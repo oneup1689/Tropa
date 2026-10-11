@@ -40,7 +40,10 @@ class TrackingService : Service(), LocationListener {
         const val KEY_SESSION = "session"
         private const val CHANNEL_ID = "tropa_tracking"
         private const val NOTIFICATION_ID = 1001
-        private const val HEARTBEAT_MS = 30_000L
+        private const val ALERT_CHANNEL_ID = "tropa_alert"
+        private const val ALERT_ID = 1002
+        private const val HEARTBEAT_MS = 10_000L // check cadence; full log line every 3rd tick
+        private const val NO_SIGNAL_MS = 45_000L // no fixes this long -> alert
         private const val WATCHDOG_MS = 90_000L
         private const val STATIONARY_STORE_MS = 15_000L
         private const val GAP_MS = 30_000L
@@ -103,6 +106,8 @@ class TrackingService : Service(), LocationListener {
     private var lastStoredWall = 0L
     private var lastFixWall = 0L
     private var stopRequested = false
+    private var alertActive = false
+    private var beatCount = 0
 
     private val heartbeat = object : Runnable {
         override fun run() {
@@ -134,6 +139,7 @@ class TrackingService : Service(), LocationListener {
             database.execSQL("UPDATE sessions SET status='active', end_ms=NULL WHERE id=?", arrayOf(resumeId))
             loadSessionStats(database, resumeId)
             log(this, "SVC", "resumed session=$resumeId points=$points restartedBySystem=${intent == null}")
+            if (intent == null) raiseAlert("Запись перезапущена системой", "В маршруте мог появиться пропуск.")
         } else {
             val cv = ContentValues().apply {
                 put("start_ms", System.currentTimeMillis())
@@ -182,6 +188,12 @@ class TrackingService : Service(), LocationListener {
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Запись маршрута", NotificationManager.IMPORTANCE_LOW)
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(ALERT_CHANNEL_ID, "Тревога: запись прервана", NotificationManager.IMPORTANCE_HIGH).apply {
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
+                }
             )
         }
         val n = buildNotification("Идёт запись маршрута")
@@ -233,6 +245,7 @@ class TrackingService : Service(), LocationListener {
     override fun onLocationChanged(loc: Location) {
         val now = System.currentTimeMillis()
         lastFixWall = now
+        clearAlert()
         val acc = if (loc.hasAccuracy()) loc.accuracy else 99f
         lastAcc = acc
         val prev = lastStored
@@ -292,19 +305,62 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun beat() {
-        val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        val since = (System.currentTimeMillis() - lastFixWall) / 1000
-        log(
-            this, "BEAT",
-            "native points=$points dist=${distanceM.toInt()}m sinceLastFix=${since}s battery=${bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)}%"
-        )
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification("Точек: $points · ${"%.2f".format(distanceM / 1000)} км"))
-        if (System.currentTimeMillis() - lastFixWall > WATCHDOG_MS) {
+        val sinceMs = System.currentTimeMillis() - lastFixWall
+        val gpsOn = lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) ?: true
+
+        // Alert the user as soon as recording is clearly interrupted.
+        if (!gpsOn) {
+            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+        } else if (sinceMs > NO_SIGNAL_MS) {
+            raiseAlert("Нет сигнала GPS уже ${sinceMs / 1000} с", "Запись маршрута приостановлена, пока сигнал не вернётся.")
+        }
+
+        beatCount++
+        if (beatCount % 3 == 0) {
+            val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            log(
+                this, "BEAT",
+                "native points=$points dist=${distanceM.toInt()}m sinceLastFix=${sinceMs / 1000}s gps=$gpsOn " +
+                    "battery=${bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)}%"
+            )
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, buildNotification("Точек: $points · ${"%.2f".format(distanceM / 1000)} км"))
+        }
+        if (gpsOn && sinceMs > WATCHDOG_MS) {
             log(this, "WATCHDOG", "no fixes for >${WATCHDOG_MS / 1000}s, re-requesting updates")
-            lastFixWall = System.currentTimeMillis()
+            lastFixWall = System.currentTimeMillis() - NO_SIGNAL_MS // keep the alert state, retry in ~45s
             requestUpdates()
         }
+    }
+
+    private fun raiseAlert(title: String, text: String) {
+        if (alertActive || stopRequested) return
+        alertActive = true
+        log(this, "ALERT", title)
+        val open = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, ALERT_CHANNEL_ID) else Notification.Builder(this)
+        val n = b.setContentTitle("⚠️ $title")
+            .setContentText(text)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(ALERT_ID, n)
+    }
+
+    private fun clearAlert() {
+        if (!alertActive) return
+        alertActive = false
+        log(this, "ALERT", "recording restored")
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(ALERT_ID)
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
+        b.setContentTitle("Запись возобновлена").setSmallIcon(R.mipmap.ic_launcher).setAutoCancel(true)
+        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(15_000)
+        nm.notify(ALERT_ID, b.build())
     }
 
     private fun finishSession(status: String) {
@@ -345,7 +401,12 @@ class TrackingService : Service(), LocationListener {
 
     override fun onProviderEnabled(provider: String) = log(this, "GPS_SERVICE", "provider $provider enabled")
 
-    override fun onProviderDisabled(provider: String) = log(this, "GPS_SERVICE", "provider $provider disabled")
+    override fun onProviderDisabled(provider: String) {
+        log(this, "GPS_SERVICE", "provider $provider disabled")
+        if (provider == LocationManager.GPS_PROVIDER) {
+            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+        }
+    }
 
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}

@@ -54,3 +54,5 @@ dist/
 test/*.gpx
 test/*.txt
 *.gpx
+
+hs_err_pid*.log
