@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 
 import 'db.dart';
 import 'debug_log.dart';
+import 'settings.dart';
 
 /// Recording facade.
 ///
@@ -188,7 +189,11 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _log.log('START', 'UI requested start resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
 
     if (Platform.isAndroid) {
-      await _sys.invokeMethod('startTracking', {'session': resumeSessionId ?? 0});
+      await _sys.invokeMethod('startTracking', {
+        'session': resumeSessionId ?? 0,
+        'maxAccuracy': AppSettings.instance.maxAccuracyM,
+        'intervalMs': AppSettings.instance.fixIntervalMs,
+      });
       // Give the service a moment to publish its state.
       for (var i = 0; i < 10 && !recording; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 200));

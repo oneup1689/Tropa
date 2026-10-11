@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'db.dart';
 import 'heal.dart';
+import 'settings.dart';
 
 /// Simple offline preview of a recorded route (no map tiles yet):
 /// solid line where GPS was continuous, a different colour where a short gap
@@ -19,7 +20,7 @@ class RouteViewPage extends StatefulWidget {
 }
 
 class _RouteViewPageState extends State<RouteViewPage> {
-  bool heal = true;
+  bool heal = AppSettings.instance.healEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -31,7 +32,8 @@ class _RouteViewPageState extends State<RouteViewPage> {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final pts = snap.data!;
           if (pts.length < 2) return const Center(child: Text('Недостаточно точек'));
-          final result = analyzeGaps(pts);
+          final healCfg = AppSettings.instance.healSettings;
+          final result = analyzeGaps(pts, settings: healCfg);
           return Column(children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -39,7 +41,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
             ),
             SwitchListTile(
               title: const Text('Склеить короткие разрывы'),
-              subtitle: const Text('Только пешие участки до 150 м. Длинные пропуски не склеиваются.'),
+              subtitle: Text('Только пешие участки до ${healCfg.bridgeMaxMeters.round()} м. Длинные пропуски не склеиваются.'),
               value: heal,
               onChanged: (v) => setState(() => heal = v),
             ),

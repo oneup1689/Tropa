@@ -36,6 +36,8 @@ class TrackingService : Service(), LocationListener {
         const val ACTION_START = "app.tropa.tropa.START"
         const val ACTION_STOP = "app.tropa.tropa.STOP"
         const val EXTRA_SESSION = "session"
+        const val EXTRA_MAX_ACC = "maxAccuracy"
+        const val EXTRA_INTERVAL = "intervalMs"
         const val PREFS = "tropa_tracking"
         const val KEY_SESSION = "session"
         private const val CHANNEL_ID = "tropa_tracking"
@@ -107,6 +109,8 @@ class TrackingService : Service(), LocationListener {
     private var lastStoredWall = 0L
     private var lastFixWall = 0L
     private var stopRequested = false
+    private var maxAccuracy = 50f
+    private var intervalMs = 2000L
     private var alertActive = false
     private var signalLost = false
     private var beatCount = 0
@@ -147,6 +151,16 @@ class TrackingService : Service(), LocationListener {
         if (running) return START_STICKY
 
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        // Settings come from the UI on a normal start; after a system restart reuse the saved ones.
+        if (intent != null && intent.hasExtra(EXTRA_MAX_ACC)) {
+            maxAccuracy = intent.getFloatExtra(EXTRA_MAX_ACC, 50f)
+            intervalMs = intent.getLongExtra(EXTRA_INTERVAL, 2000L)
+            prefs.edit().putFloat("max_acc", maxAccuracy).putLong("interval_ms", intervalMs).apply()
+        } else {
+            maxAccuracy = prefs.getFloat("max_acc", 50f)
+            intervalMs = prefs.getLong("interval_ms", 2000L)
+        }
+        log(this, "SVC", "settings: maxAccuracy=${maxAccuracy}m interval=${intervalMs}ms")
         val database = openDb(this)
         db = database
 
@@ -255,7 +269,7 @@ class TrackingService : Service(), LocationListener {
         }
         try {
             manager.removeUpdates(this)
-            manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000L, 0f, this, Looper.getMainLooper())
+            manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, intervalMs, 0f, this, Looper.getMainLooper())
             log(this, "SVC", "GPS updates requested, gpsEnabled=${manager.isProviderEnabled(LocationManager.GPS_PROVIDER)}")
         } catch (e: Exception) {
             log(this, "SVC", "requestLocationUpdates failed: $e")
@@ -274,8 +288,8 @@ class TrackingService : Service(), LocationListener {
         var dist = 0f
         var dtSec = 0.0
 
-        if (acc > 50f) {
-            skip = "acc>50"
+        if (acc > maxAccuracy) {
+            skip = "acc>${maxAccuracy.toInt()}"
         } else if (prev != null) {
             dtSec = (loc.time - prev.time) / 1000.0
             dist = prev.distanceTo(loc)

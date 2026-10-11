@@ -5,7 +5,6 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -16,37 +15,13 @@ import 'package:flutter/services.dart';
 
 import 'recorder.dart';
 import 'route_view.dart';
-
-/// App theme: light / dark / follow the phone. Stored in a small file next to the log.
-final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);
-
-Future<File> _themeFile() async => File('${(await getApplicationDocumentsDirectory()).path}/theme_mode.txt');
-
-Future<void> _loadTheme() async {
-  try {
-    final f = await _themeFile();
-    if (await f.exists()) {
-      final v = (await f.readAsString()).trim();
-      themeMode.value = ThemeMode.values.firstWhere((m) => m.name == v, orElse: () => ThemeMode.system);
-    }
-  } catch (_) {
-    // keep default
-  }
-}
-
-Future<void> _saveTheme(ThemeMode m) async {
-  themeMode.value = m;
-  try {
-    await (await _themeFile()).writeAsString(m.name);
-  } catch (_) {
-    // theme still applies for this run
-  }
-}
+import 'settings.dart';
+import 'settings_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DebugLog.instance.init();
-  await _loadTheme();
+  await AppSettings.instance.load();
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
   await _logDevice();
   await Recorder.instance.init();
@@ -77,7 +52,7 @@ class TropaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
-      valueListenable: themeMode,
+      valueListenable: AppSettings.instance.themeNotifier,
       builder: (context, mode, _) => MaterialApp(
         title: 'Tropa',
         debugShowCheckedModeBanner: false,
@@ -213,7 +188,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Export dialog: the user chooses what goes into the GPX file.
   Future<void> _exportGpx(int id) async {
-    var heal = true, withTime = true, withEle = true;
+    var heal = AppSettings.instance.healEnabled, withTime = true, withEle = true;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => StatefulBuilder(
@@ -224,7 +199,7 @@ class _HomePageState extends State<HomePage> {
               value: heal,
               onChanged: (v) => setS(() => heal = v ?? heal),
               title: const Text('Склеить короткие разрывы'),
-              subtitle: const Text('Только пешие участки до 150 м'),
+              subtitle: Text('Только пешие участки до ${AppSettings.instance.healSettings.bridgeMaxMeters.round()} м'),
             ),
             CheckboxListTile(
               value: withTime,
@@ -247,31 +222,6 @@ class _HomePageState extends State<HomePage> {
     if (ok != true) return;
     final f = await writeGpx(id, withTime: withTime, withElevation: withEle, heal: heal);
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
-  }
-
-  Future<void> _pickTheme() async {
-    final picked = await showDialog<ThemeMode>(
-      context: context,
-      builder: (c) => SimpleDialog(
-        title: const Text('Тема оформления'),
-        children: [
-          for (final (mode, label) in [
-            (ThemeMode.system, 'Как на смартфоне'),
-            (ThemeMode.light, 'Светлая'),
-            (ThemeMode.dark, 'Тёмная'),
-          ])
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(c, mode),
-              child: Row(children: [
-                Icon(themeMode.value == mode ? Icons.radio_button_checked : Icons.radio_button_off),
-                const SizedBox(width: 12),
-                Text(label),
-              ]),
-            ),
-        ],
-      ),
-    );
-    if (picked != null) await _saveTheme(picked);
   }
 
   /// Quick notes for the test walk: what the user did with the phone and when.
@@ -362,7 +312,9 @@ class _HomePageState extends State<HomePage> {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) async {
-              if (v == 'theme') await _pickTheme();
+              if (v == 'settings') {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()));
+              }
               if (v == 'mark') await _addMark();
               if (v == 'log') await _shareLog();
               if (v == 'clear') {
@@ -371,7 +323,7 @@ class _HomePageState extends State<HomePage> {
               }
             },
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'theme', child: Text('Тема оформления')),
+              PopupMenuItem(value: 'settings', child: Text('Настройки')),
               PopupMenuItem(value: 'mark', child: Text('Добавить метку в лог')),
               PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
               PopupMenuItem(value: 'clear', child: Text('Очистить лог')),

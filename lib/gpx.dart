@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'db.dart';
 import 'heal.dart';
+import 'settings.dart';
 
 /// Gap in seconds after which a new track segment starts, so that the line
 /// is never drawn straight across a stretch where GPS was lost.
@@ -19,7 +20,7 @@ Future<File> writeGpx(
   bool heal = false,
 }) async {
   final pts = await TrackDb.instance.points(sessionId);
-  final result = analyzeGaps(pts);
+  final result = analyzeGaps(pts, settings: AppSettings.instance.healSettings);
   final b = StringBuffer()
     ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
     ..writeln('<gpx version="1.1" creator="Tropa" xmlns="http://www.topografix.com/GPX/1/1">')
