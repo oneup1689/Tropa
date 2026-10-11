@@ -70,7 +70,6 @@ class TrackingService : Service(), LocationListener {
             val db = SQLiteDatabase.openDatabase(
                 path.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
             )
-            db.execSQL("PRAGMA busy_timeout=5000")
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                     "start_ms INTEGER NOT NULL, end_ms INTEGER, status TEXT NOT NULL)"
@@ -118,7 +117,18 @@ class TrackingService : Service(), LocationListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        try {
+            handleStart(intent)
+        } catch (e: Throwable) {
+            // Never let a service error kill the whole app: write the reason to the debug log instead.
+            log(this, "SVC", "FATAL in onStartCommand: $e | ${e.stackTraceToString().take(1200)}")
+            running = false
+            stopSelf()
+            START_NOT_STICKY
+        }
+
+    private fun handleStart(intent: Intent?): Int {
         if (intent?.action == ACTION_STOP) {
             stopRequested = true
             finishSession("finished")
