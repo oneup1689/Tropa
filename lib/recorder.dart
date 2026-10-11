@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:battery_plus/battery_plus.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -34,8 +35,41 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   /// Set at startup when the previous run ended without "stop" (killed by the system).
   SessionInfo? interrupted;
 
+  static const _sys = MethodChannel('tropa/system');
+  String? _lastModes;
+
+  /// Android system modes that explain interruptions: airplane, power saver, Doze, screen.
+  Future<String> _modes() async {
+    if (!Platform.isAndroid) return 'modes=n/a';
+    try {
+      final m = await _sys.invokeMapMethod<String, dynamic>('state');
+      return 'airplane=${m?['airplane']} powerSave=${m?['powerSave']} doze=${m?['doze']} '
+          'screenOn=${m?['interactive']} battOptIgnored=${m?['ignoringBatteryOpt']}';
+    } catch (e) {
+      return 'modes=error($e)';
+    }
+  }
+
+  /// User note written into the log (e.g. "turned on airplane mode").
+  void mark(String note) => _log.log('MARK', note);
+
+  void _watchModes() {
+    Timer.periodic(const Duration(seconds: 5), (_) async {
+      final now = await _modes();
+      if (now != _lastModes) {
+        _log.log('MODE', now);
+        _lastModes = now;
+      }
+    });
+    Geolocator.getServiceStatusStream().listen(
+      (s) => _log.log('GPS_SERVICE', s == ServiceStatus.enabled ? 'GPS ON' : 'GPS OFF'),
+      onError: (Object e) => _log.log('GPS_SERVICE', 'status stream error: $e'),
+    );
+  }
+
   Future<void> init() async {
     WidgetsBinding.instance.addObserver(this);
+    _watchModes();
     final prev = await TrackDb.instance.activeSession();
     if (prev != null) {
       final last = await TrackDb.instance.lastPointTime(prev.id);
@@ -173,7 +207,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _tick() async {
     final since = _lastFix == null ? -1 : DateTime.now().difference(_lastFix!).inSeconds;
-    _log.log('BEAT', 'points=$pointCount dist=${distanceM.toStringAsFixed(0)}m sinceLastFix=${since}s ${await _batteryInfo()}');
+    _log.log('BEAT', 'points=$pointCount dist=${distanceM.toStringAsFixed(0)}m sinceLastFix=${since}s ${await _batteryInfo()} ${await _modes()}');
     // Watchdog: GPS silently stopped delivering fixes — try to resubscribe.
     if (_lastFix != null && DateTime.now().difference(_lastFix!) > _watchdog) {
       _log.log('WATCHDOG', 'no fixes for >${_watchdog.inSeconds}s, resubscribing');

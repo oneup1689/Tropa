@@ -160,6 +160,44 @@ class _HomePageState extends State<HomePage> {
     await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
   }
 
+  /// Quick notes for the test walk: what the user did with the phone and when.
+  Future<void> _addMark() async {
+    const presets = [
+      'Режим самолёта ВКЛ',
+      'Режим самолёта ВЫКЛ',
+      'Экономия батареи ВКЛ',
+      'Экономия батареи ВЫКЛ',
+      'GPS ВКЛ',
+      'GPS ВЫКЛ',
+      'Экран погашен',
+      'Экран включён',
+      'Телефон в кармане',
+    ];
+    final ctl = TextEditingController();
+    final note = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Метка в лог'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Wrap(spacing: 6, children: [
+              for (final p in presets) ActionChip(label: Text(p), onPressed: () => Navigator.pop(c, p)),
+            ]),
+            TextField(controller: ctl, decoration: const InputDecoration(hintText: 'Своя заметка')),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(c, ctl.text.trim()), child: const Text('Записать')),
+        ],
+      ),
+    );
+    if (note != null && note.isNotEmpty) {
+      rec.mark(note);
+      _snack('Метка записана');
+    }
+  }
+
   Future<void> _shareLog() async {
     final path = DebugLog.instance.path;
     if (path == null) return;
@@ -196,6 +234,7 @@ class _HomePageState extends State<HomePage> {
         actions: [
           PopupMenuButton<String>(
             onSelected: (v) async {
+              if (v == 'mark') await _addMark();
               if (v == 'log') await _shareLog();
               if (v == 'clear') {
                 await DebugLog.instance.clear();
@@ -203,6 +242,7 @@ class _HomePageState extends State<HomePage> {
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(value: 'mark', child: Text('Добавить метку в лог')),
               PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
               PopupMenuItem(value: 'clear', child: Text('Очистить лог')),
             ],
