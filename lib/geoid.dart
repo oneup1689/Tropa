@@ -1,3 +1,4 @@
+import 'debug_log.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -24,7 +25,8 @@ class Geoid {
   Future<void> load() async {
     try {
       loadFromBytes(await rootBundle.load('assets/geoid/egm96_half_deg.bin'));
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('GEOID', 'table not loaded: $e');
       // Without the table the undulation is treated as 0 (altitude stays ellipsoidal).
     }
   }

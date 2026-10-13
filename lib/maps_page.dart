@@ -144,9 +144,25 @@ class _MapsPageState extends State<MapsPage> {
         const SizedBox(height: 6),
         if (MapStore.lastListError != null) Text(MapStore.lastListError!, style: TextStyle(color: cs.error)),
         if (regions.isEmpty && MapStore.lastListError == null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 18),
-            child: Text(t('Пока нет ни одной карты.'), style: text.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+          Card(
+            color: cs.secondaryContainer.withValues(alpha: 0.55),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.route_outlined, color: cs.onSecondaryContainer),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(t('Карта не обязательна'), style: text.titleMedium),
+                    const SizedBox(height: 4),
+                    Text(
+                      t('Tropa записывает маршрут по GPS и без карты. Скачать её можно позже: пройденный путь ляжет на неё, им можно поделиться (GPX) или собрать постер.'),
+                      style: text.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ]),
+                ),
+              ]),
+            ),
           ),
         for (final r in regions) _regionCard(context, r),
         const SizedBox(height: 14),

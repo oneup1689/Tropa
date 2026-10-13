@@ -195,7 +195,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   Future<String> _saverInfo() async {
     try {
       return 'batterySaver=${await _battery.isInBatterySaveMode}';
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('SVC', 'battery saver state unknown: $e');
       return 'batterySaver=unknown';
     }
   }

@@ -150,7 +150,8 @@ WeatherInfo? summarizeWeather(Map<String, dynamic> weather, int startMs, int end
       final m = _Hourly.parse(marine);
       final mi = m.hoursBetween(startMs, endMs);
       sea = _avg([for (final i in mi) (m.values['sea_surface_temperature']?[i] as num?)]);
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('WEATHER', 'sea temperature unavailable: $e');
       sea = null;
     }
   }

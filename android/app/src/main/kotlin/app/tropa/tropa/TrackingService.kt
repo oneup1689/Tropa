@@ -1,9 +1,5 @@
 package app.tropa.tropa
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.ContentValues
 import android.content.Context
@@ -27,15 +23,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import java.io.File
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.sqrt
 
 /**
  * Records GPS fixes independently of the Flutter UI, so closing or swiping the app does not stop
@@ -69,11 +57,6 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         const val PREFS = "tropa_tracking"
         const val KEY_SESSION = "session"
         const val KEY_AUTO = "auto_mode"
-        const val ALERT_CHANNEL_ID = "tropa_alert"
-        private const val CHANNEL_ID = "tropa_tracking"
-        private const val NOTIFICATION_ID = 1001
-        private const val ALERT_ID = 1002
-        private const val ROUTE_ALERT_ID = 1003
         private const val HEARTBEAT_MS = 10_000L // check cadence; full log line every 3rd tick
         private const val NO_SIGNAL_MS = 45_000L
         private const val WATCHDOG_MS = 90_000L
@@ -125,62 +108,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             "sinceFix" to (if ((running || watching) && lastFixAt > 0) (System.currentTimeMillis() - lastFixAt) / 1000 else 0L)
         )
 
-        fun openDb(context: Context): SQLiteDatabase {
-            val path = context.getDatabasePath("tropa.db")
-            path.parentFile?.mkdirs()
-            val db = SQLiteDatabase.openDatabase(
-                path.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
-            )
-            db.execSQL(
-                "CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "start_ms INTEGER NOT NULL, end_ms INTEGER, status TEXT NOT NULL, " +
-                    "mode TEXT NOT NULL DEFAULT 'mixed')"
-            )
-            db.execSQL(
-                "CREATE TABLE IF NOT EXISTS points(id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "session_id INTEGER NOT NULL, ts_ms INTEGER NOT NULL, lat REAL NOT NULL, " +
-                    "lon REAL NOT NULL, acc REAL, alt REAL, speed REAL, pressure REAL)"
-            )
-            db.execSQL("CREATE INDEX IF NOT EXISTS idx_points_session ON points(session_id, ts_ms)")
-            // Databases created by older builds miss some columns.
-            ensureColumn(db, "sessions", "mode", "TEXT NOT NULL DEFAULT 'mixed'")
-            ensureColumn(db, "points", "pressure", "REAL")
-            if (db.version == 0) db.version = 1 // lets sqflite open the same file without re-creating
-            return db
-        }
-
-        private fun ensureColumn(db: SQLiteDatabase, table: String, column: String, type: String) {
-            var has = false
-            db.rawQuery("PRAGMA table_info($table)", null).use { c ->
-                while (c.moveToNext()) if (c.getString(1) == column) has = true
-            }
-            if (!has) db.execSQL("ALTER TABLE $table ADD COLUMN $column $type")
-        }
-
-        fun log(context: Context, tag: String, message: String) {
-            try {
-                val dir = File(context.applicationInfo.dataDir, "app_flutter")
-                dir.mkdirs()
-                val ts = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).format(Date())
-                File(dir, "tropa_debug_log.txt").appendText("$ts [$tag] $message\n")
-            } catch (_: Exception) {
-                // logging must never break recording
-            }
-        }
-
-        fun ensureChannels(context: Context) {
-            if (Build.VERSION.SDK_INT < 26) return
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, Tr.t(context, "Запись маршрута"), NotificationManager.IMPORTANCE_LOW)
-            )
-            nm.createNotificationChannel(
-                NotificationChannel(ALERT_CHANNEL_ID, Tr.t(context, "Тревоги и напоминания"), NotificationManager.IMPORTANCE_HIGH).apply {
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
-                }
-            )
-        }
+        /** Shorthand kept for the receivers and the service itself; the log lives in [TrackingDb]. */
+        fun log(context: Context, tag: String, message: String) = TrackingDb.log(context, tag, message)
     }
 
     private var state = State.IDLE
@@ -225,13 +154,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private var motionTrigger: TriggerEventListener? = null
 
     // navigation along an imported route
-    private var routeLat: DoubleArray? = null
-    private var routeLon: DoubleArray? = null
+    private val route by lazy { RouteGuard(this) }
     private var offRouteBase = 40f
-    private var offCount = 0
-    private var onCount = 0
-    private var offStartWall = 0L
-    private var offActive = false
 
     private val gpsOffCheck = Runnable {
         // Debounce: alert only if GPS is still off 10 s after it was switched off.
@@ -456,12 +380,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             if (!gpsOffWhileWatching) {
                 gpsOffWhileWatching = true
                 log(this, "AUTO", "movement seen ($reason) but GPS is off: asking the user to switch it on")
-                postAlert(ALERT_ID, Tr.t(this, "Вы двигаетесь, но GPS выключен"), Tr.t(this, "Включите геолокацию — запись маршрута начнётся сама."))
+                Notifier.postAlert(this, Notifier.ALERT_ID, Tr.t(this, "Вы двигаетесь, но GPS выключен"), Tr.t(this, "Включите геолокацию — запись маршрута начнётся сама."))
             }
             return
         }
         gpsOffWhileWatching = false
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID)
+        Notifier.cancel(this, Notifier.ALERT_ID)
         state = State.PROBE
         probeStartWall = System.currentTimeMillis()
         probeOrigin = null
@@ -512,7 +436,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         stopLocation()
         unregisterMotionSensors()
-        val database = db ?: openDb(this).also { db = it }
+        val database = db ?: TrackingDb.open(this).also { db = it }
 
         val resumeId = requestedId
         if (resumeId > 0) {
@@ -552,11 +476,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         lastFixWall = lastMovingWall
         lastFixAt = lastFixWall
         sessionDay = dayOf(System.currentTimeMillis())
-        offActive = false
-        offCount = 0
-        onCount = 0
+        route.load(database, prefs.getLong("route_id", 0L), offRouteBase)
         offRouteM = -1.0
-        loadRoute(database, prefs.getLong("route_id", 0L))
 
         acquireWakeLock(0)
         state = State.RECORD
@@ -584,7 +505,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         stopLocation()
         unregisterPressureSensor()
         releaseWakeLock()
-        clearRoute()
+        route.clear()
+        offRouteM = -1.0
         cancelAlerts()
         running = false
         lowPower = false
@@ -662,33 +584,16 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     // ------------------------------------------------------------------ foreground notification
 
     private fun startInForeground(text: String) {
-        ensureChannels(this)
-        val n = buildNotification(text)
+        Notifier.ensureChannels(this)
+        val n = Notifier.ongoing(this, text)
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            startForeground(Notifier.NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         } else {
-            startForeground(NOTIFICATION_ID, n)
+            startForeground(Notifier.NOTIFICATION_ID, n)
         }
     }
 
-    private fun updateNotification(text: String) {
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(text))
-    }
-
-    private fun buildNotification(text: String): Notification {
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
-        return b.setContentTitle("Tropa")
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_stat_tropa)
-            .setOngoing(true)
-            .setContentIntent(open)
-            .build()
-    }
+    private fun updateNotification(text: String) = Notifier.updateOngoing(this, text)
 
     // ------------------------------------------------------------------ GPS and sensors plumbing
 
@@ -849,7 +754,14 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 (if (moving) "stored" else "stored(still)") + (if (lastPressure > 0) " p=${"%.1f".format(lastPressure)}" else "")
         )
 
-        if (routeLat != null) evaluateRoute(lat, lon, acc, movingNow, now)
+        if (route.loaded) {
+            route.evaluate(
+                lat, lon, acc, offRouteBase, movingNow, now,
+                onOff = { d -> Notifier.postAlert(this, Notifier.ROUTE_ALERT_ID, Tr.t(this, "Вы сошли с маршрута"), Tr.offRoute(this, d)) },
+                onBack = { Notifier.cancel(this, Notifier.ROUTE_ALERT_ID) }
+            )
+            offRouteM = route.lastDistance
+        }
     }
 
     // ------------------------------------------------------------------ manual pause
@@ -919,91 +831,6 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         } catch (e: Exception) {
             log(this, "SVC", "db insert failed: $e")
             false
-        }
-    }
-
-    // ------------------------------------------------------------------ route navigation (off-route warning)
-
-    private fun loadRoute(database: SQLiteDatabase, routeId: Long) {
-        clearRoute()
-        if (routeId <= 0) return
-        try {
-            database.rawQuery("SELECT lat, lon FROM route_points WHERE route_id=? ORDER BY idx", arrayOf(routeId.toString())).use { c ->
-                val la = DoubleArray(c.count)
-                val lo = DoubleArray(c.count)
-                var i = 0
-                while (c.moveToNext()) {
-                    la[i] = c.getDouble(0)
-                    lo[i] = c.getDouble(1)
-                    i++
-                }
-                if (i >= 2) {
-                    routeLat = la
-                    routeLon = lo
-                    log(this, "NAV", "route $routeId loaded: $i points, off-route threshold ${offRouteBase.toInt()} m")
-                }
-            }
-        } catch (e: Exception) {
-            log(this, "NAV", "could not load route $routeId: $e")
-        }
-    }
-
-    private fun clearRoute() {
-        routeLat = null
-        routeLon = null
-        offRouteM = -1.0
-        offActive = false
-        offCount = 0
-        onCount = 0
-    }
-
-    /** Distance in metres from a point to the route polyline (flat approximation, fine for a few km). */
-    private fun distanceToRoute(lat: Double, lon: Double): Double {
-        val la = routeLat ?: return -1.0
-        val lo = routeLon ?: return -1.0
-        val ky = 110540.0
-        val kx = 111320.0 * cos(Math.toRadians(lat))
-        var best = Double.MAX_VALUE
-        for (i in 0 until la.size - 1) {
-            val ax = (lo[i] - lon) * kx
-            val ay = (la[i] - lat) * ky
-            val bx = (lo[i + 1] - lon) * kx
-            val by = (la[i + 1] - lat) * ky
-            val dx = bx - ax
-            val dy = by - ay
-            val len2 = dx * dx + dy * dy
-            val t = if (len2 == 0.0) 0.0 else ((-ax) * dx + (-ay) * dy) / len2
-            val tc = t.coerceIn(0.0, 1.0)
-            val px = ax + tc * dx
-            val py = ay + tc * dy
-            val d = sqrt(px * px + py * py)
-            if (d < best) best = d
-        }
-        return best
-    }
-
-    /** Needs 3 consecutive fixes over 15 s beyond the threshold (>= 2x accuracy) to warn; 3 fixes within 25 m to clear. */
-    private fun evaluateRoute(lat: Double, lon: Double, acc: Float, movingNow: Boolean, now: Long) {
-        val d = distanceToRoute(lat, lon)
-        offRouteM = d
-        val threshold = max(offRouteBase, acc * 2f).toDouble()
-        if (d > threshold && (movingNow || offCount > 0)) {
-            if (offCount == 0) offStartWall = now
-            offCount++
-            onCount = 0
-            if (!offActive && offCount >= 3 && now - offStartWall >= 15_000) {
-                offActive = true
-                log(this, "NAV", "OFF ROUTE: ${d.toInt()} m from the route")
-                postAlert(ROUTE_ALERT_ID, Tr.t(this, "Вы сошли с маршрута"), Tr.offRoute(this, d.toInt()))
-            }
-        } else if (d < 25.0) {
-            onCount++
-            offCount = 0
-            if (offActive && onCount >= 3) {
-                offActive = false
-                log(this, "NAV", "back on route")
-                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ROUTE_ALERT_ID)
-            }
         }
     }
 
@@ -1078,44 +905,23 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
 
     // ------------------------------------------------------------------ alerts
 
-    private fun postAlert(id: Int, title: String, text: String) {
-        val open = PendingIntent.getActivity(
-            this, 1, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, ALERT_CHANNEL_ID) else Notification.Builder(this)
-        val n = b.setContentTitle("⚠️ $title")
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_stat_tropa)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(id, n)
-    }
-
     private fun raiseAlert(title: String, text: String) {
         if (alertActive || stopRequested) return
         alertActive = true
         log(this, "ALERT", title)
-        postAlert(ALERT_ID, title, text)
+        Notifier.postAlert(this, Notifier.ALERT_ID, title, text)
     }
 
     private fun clearAlert() {
         if (!alertActive) return
         alertActive = false
         log(this, "ALERT", "recording restored")
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(ALERT_ID)
-        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
-        b.setContentTitle(Tr.t(this, "Запись возобновлена")).setSmallIcon(R.drawable.ic_stat_tropa).setAutoCancel(true)
-        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(15_000)
-        nm.notify(ALERT_ID, b.build())
+        Notifier.showResumed(this)
     }
 
     private fun cancelAlerts() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(ALERT_ID)
-        nm.cancel(ROUTE_ALERT_ID)
+        Notifier.cancel(this, Notifier.ALERT_ID)
+        Notifier.cancel(this, Notifier.ROUTE_ALERT_ID)
         alertActive = false
     }
 
@@ -1159,7 +965,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             // Reset so that the next time GPS is switched off the alert fires again.
             handler.removeCallbacks(gpsOffCheck)
             alertActive = false
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID)
+            Notifier.cancel(this, Notifier.ALERT_ID)
         }
     }
 

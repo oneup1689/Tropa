@@ -1,3 +1,4 @@
+import 'debug_log.dart';
 import 'package:xml/xml.dart';
 
 /// A route read from a GPX file: the name and the track/route points in order.
@@ -14,7 +15,8 @@ ParsedRoute? parseGpx(String xml, {String fallbackName = 'Маршрут'}) {
   final XmlDocument doc;
   try {
     doc = XmlDocument.parse(xml);
-  } catch (_) {
+  } catch (e) {
+    DebugLog.instance.log('ROUTE', 'GPX is not valid XML: $e');
     return null;
   }
 

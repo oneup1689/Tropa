@@ -64,6 +64,20 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(null)
                     }
+                    "network" -> {
+                        // Used before big downloads: warn when the phone is not on Wi-Fi.
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                        val online = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                        val wifi = caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                            caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                        result.success(mapOf("online" to online, "wifi" to wifi))
+                    }
+                    "freeBytes" -> {
+                        // Free space where the maps are stored (the app's external folder).
+                        val dir = getExternalFilesDir(null) ?: filesDir
+                        result.success(android.os.StatFs(dir.path).availableBytes)
+                    }
                     "moveToBack" -> {
                         moveTaskToBack(true)
                         result.success(null)

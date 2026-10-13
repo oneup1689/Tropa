@@ -1,3 +1,4 @@
+import 'debug_log.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
@@ -225,7 +226,8 @@ class AppSettings extends ChangeNotifier {
         final old = File(p.join(dir.path, 'theme_mode.txt'));
         if (await old.exists()) _values['theme'] = (await old.readAsString()).trim();
       }
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('SETTINGS', 'load failed, defaults used: $e');
       // defaults are used
     }
     _syncTheme();
@@ -235,7 +237,8 @@ class AppSettings extends ChangeNotifier {
   Future<void> _save() async {
     try {
       await _file?.writeAsString(jsonEncode(_values));
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('SETTINGS', 'save failed: $e');
       // value still applies for this run
     }
   }

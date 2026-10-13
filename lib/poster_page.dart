@@ -96,13 +96,17 @@ class _PosterPageState extends State<PosterPage> {
         try {
           _dem = DemSamples.fromJson(jsonDecode(demRaw) as Map<String, dynamic>);
           _demStatus = _demLine(_dem!);
-        } catch (_) {}
+        } catch (e) {
+          DebugLog.instance.log('POSTER', 'cached elevation unreadable: $e');
+        }
       }
       final raw = meta['weather'] as String?;
       if (raw != null) {
         try {
           _weather = WeatherInfo.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        } catch (_) {}
+        } catch (e) {
+          DebugLog.instance.log('POSTER', 'cached weather unreadable: $e');
+        }
       }
       _loading = false;
       _weatherStatus = _weather == null ? t('Погода ещё не загружена') : _weatherLine(_weather!);

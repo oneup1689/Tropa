@@ -139,7 +139,8 @@ Future<RegionMeta?> readRegionMeta(File map) async {
     final f = metaFileFor(map);
     if (!await f.exists()) return null;
     return RegionMeta.fromJson(jsonDecode(await f.readAsString()) as Map<String, dynamic>);
-  } catch (_) {
+  } catch (e) {
+    DebugLog.instance.log('MAPDL', 'region meta unreadable: $e');
     return null;
   }
 }
@@ -193,7 +194,8 @@ class MapDownloader extends ChangeNotifier {
       final f = await _stateFile();
       if (!await f.exists()) return null;
       return jsonDecode(await f.readAsString()) as Map<String, Object?>;
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('MAPDL', 'download state unreadable: $e');
       return null;
     }
   }
@@ -332,7 +334,9 @@ class MapDownloader extends ChangeNotifier {
       // Interrupted (network, storage): the state file stays, the download can be continued.
       try {
         await stateFile.writeAsString(jsonEncode(job));
-      } catch (_) {}
+      } catch (e2) {
+        DebugLog.instance.log('MAPDL', 'could not save resume state: $e2');
+      }
       DebugLog.instance.log('MAPDL', 'download failed: $e');
       _set(DownloadState.failed, err: '$e');
     } finally {

@@ -112,12 +112,12 @@ class PlannerReceiver : BroadcastReceiver() {
             }
         }
 
-        TrackingService.ensureChannels(context)
+        Notifier.ensureChannels(context)
         val open = PendingIntent.getActivity(
             context, id, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, TrackingService.ALERT_CHANNEL_ID) else Notification.Builder(context)
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, Notifier.ALERT_CHANNEL_ID) else Notification.Builder(context)
         val text = if (started) Tr.t(context, "Запись маршрута запущена автоматически.") else Tr.t(context, "Не забудьте включить запись трека.")
         val n = b.setContentTitle("🥾 $title").setContentText(text).setSmallIcon(R.drawable.ic_stat_tropa)
             .setContentIntent(open).setAutoCancel(true).build()

@@ -46,7 +46,8 @@ class MapStore {
     Directory base;
     try {
       base = (Platform.isAndroid ? await getExternalStorageDirectory() : null) ?? await getApplicationDocumentsDirectory();
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('MAPS', 'external storage unavailable, using app folder: $e');
       base = await getApplicationDocumentsDirectory();
     }
     final dir = Directory(p.join(base.path, 'maps'));
@@ -82,7 +83,8 @@ class MapStore {
       final bd = ByteData.sublistView(Uint8List.fromList(head));
       double v(int off) => bd.getInt32(off, Endian.little) / 1e7;
       return RegionBounds(v(102), v(106), v(110), v(114));
-    } catch (_) {
+    } catch (e) {
+      DebugLog.instance.log('MAPS', 'cannot read map header of ${f.path}: $e');
       return null;
     } finally {
       await raf?.close();

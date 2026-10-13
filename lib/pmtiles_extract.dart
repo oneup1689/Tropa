@@ -1,3 +1,4 @@
+import 'debug_log.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -655,7 +656,8 @@ Future<({String key, int size})?> latestProtomapsBuild() async {
     list.sort((a, b) => (a['key'] as String).compareTo(b['key'] as String));
     final last = list.last as Map<String, dynamic>;
     return (key: last['key'] as String, size: (last['size'] as num).toInt());
-  } catch (_) {
+  } catch (e) {
+    DebugLog.instance.log('MAPDL', 'builds list unavailable: $e');
     return null;
   } finally {
     client.close(force: true);

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
+import 'device_net.dart';
 import 'l10n.dart';
 import 'map_downloads.dart';
 import 'pmtiles_extract.dart';
+
+const _spareBytes = 50 * 1048576; // always leave this much free so the phone itself keeps working
+const _mobileWarnBytes = 20 * 1048576; // below this the mobile-data warning is not worth showing
 
 String _mb(num bytes) {
   final mb = bytes / 1048576;
@@ -53,12 +57,42 @@ Future<bool> offerDownload(
     dl.cancel();
     return false;
   }
+  // Not enough room: the download is not started at all.
+  final free = await freeStorageBytes();
+  final need = quote.fileBytes + _spareBytes;
+  if (free != null && free < need) {
+    dl.cancel();
+    if (context.mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(t('Не хватает места')),
+          content: Text(t('Карта «{n}» займёт {a}, а на телефоне свободно {f}. Освободите место и попробуйте снова.',
+              {'n': name, 'a': _mb(quote.fileBytes), 'f': _mb(free)})),
+          actions: [FilledButton(onPressed: () => Navigator.pop(c), child: Text(t('Понятно')))],
+        ),
+      );
+    }
+    return false;
+  }
+  // Mobile internet: say how much it will take and let the person decide.
+  final net = await networkInfo();
+  final onMobile = net != null && net.online && !net.wifi && quote.downloadBytes > _mobileWarnBytes;
+  if (!context.mounted) {
+    dl.cancel();
+    return false;
+  }
   final big = quote.downloadBytes > 800 * 1048576;
   final ok = await showDialog<bool>(
     context: context,
     builder: (c) => AlertDialog(
-      title: Text(t('Скачать карту «{n}»?', {'n': name})),
+      title: Text(onMobile ? t('Wi-Fi не подключён') : t('Скачать карту «{n}»?', {'n': name})),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (onMobile) ...[
+          Text(t('Карта «{n}» весит {a}, а вы не в Wi-Fi: загрузка пойдёт по мобильному интернету. Скачать?',
+              {'n': name, 'a': _mb(quote.downloadBytes)})),
+          const SizedBox(height: 10),
+        ],
         Text(t('Будет загружено: {a}', {'a': _mb(quote.downloadBytes)})),
         Text(t('Займёт на телефоне: {a}', {'a': _mb(quote.fileBytes)})),
         const SizedBox(height: 10),
@@ -67,7 +101,7 @@ Future<bool> offerDownload(
       ]),
       actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
-        FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Скачать'))),
+        FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(onMobile ? t('Скачать по мобильной сети') : t('Скачать'))),
       ],
     ),
   );
