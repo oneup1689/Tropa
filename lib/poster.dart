@@ -497,7 +497,7 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
   if (o.weather && weather != null) {
     final (emoji, _) = weather.condition;
     final feels = (weather.feelsAvg - weather.tempAvg).abs() >= 2 ? t(' (ощущ. {p})', {'p': Units.temp(weather.feelsAvg)}) : '';
-    final rain = weather.precipMm >= 0.2 ? ' · 🌧 ${weather.precipMm.toStringAsFixed(1)} ${t('мм')}' : '';
+    final rain = weather.precipMm >= 0.2 ? ' · 🌧 ${Units.precip(weather.precipMm)}' : '';
     lines.add('$emoji ${Units.temp(weather.tempAvg)}$feels · 💨 ${Units.speed(weather.windKmh / 3.6, digits: 0)}$rain');
   }
   final hasWater = mode == TravelMode.water || segments.any((s) => s.mode == TravelMode.water);
@@ -780,7 +780,7 @@ void drawDistanceScale(Canvas c, Projection proj, TrackPoint around, Offset at, 
   final color = light ? const Color(0xFF263238) : const Color(0xFFFFFFFF);
   final shadow = light ? const Color(0x88FFFFFF) : const Color(0x99000000);
   final label = Units.imperial
-      ? '${(meters / 1609.344) < 1 ? (meters / 1609.344).toStringAsFixed(meters / 1609.344 < 0.2 ? 1 : 2) : (meters / 1609.344).round()} mi'
+      ? '${(meters / 1609.344) < 1 ? (meters / 1609.344).toStringAsFixed(meters / 1609.344 < 0.2 ? 1 : 2) : (meters / 1609.344).round()} ${Units.kmUnit}'
       : (meters >= 1000 ? '${(meters / 1000).round()} ${t('км')}' : '${meters.round()} ${t('м')}');
   for (final (dx, dy, col, w) in [(1.5, 1.5, shadow, 7.0), (0.0, 0.0, color, 3.5)]) {
     final p = Paint()

@@ -327,9 +327,9 @@ void _panel(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> 
       ..strokeWidth = 1.5
       ..color = const Color(0x33FFFFFF));
     drawText(c, emoji, Offset(x + 20, y + 26), bodyStyle(58));
-    drawText(c, '${weather.tempAvg.round()}°', Offset(x + 112, y + 18), headingStyle(44, weight: 700));
+    drawText(c, Units.temp(weather.tempAvg), Offset(x + 112, y + 18), headingStyle(44, weight: 700));
     drawText(c, text, Offset(x + 112, y + 74), bodyStyle(24, weight: 500, color: const Color(0xFFE0E0E0)), maxWidth: 190, maxLines: 1);
-    final rain = weather.precipMm >= 0.2 ? t('осадки {p} мм', {'p': weather.precipMm.toStringAsFixed(1)}) : t('без осадков');
+    final rain = weather.precipMm >= 0.2 ? t('осадки {p}', {'p': Units.precip(weather.precipMm)}) : t('без осадков');
     drawText(c, t('ощущается {a}\nветер {b}\n{c}', {'a': Units.temp(weather.feelsAvg), 'b': Units.speed(weather.windKmh / 3.6, digits: 0), 'c': rain}), Offset(x + 300, y + 18),
         bodyStyle(22, color: const Color(0xFFCFD8DC)), maxWidth: 190);
     y += 128 + 14;

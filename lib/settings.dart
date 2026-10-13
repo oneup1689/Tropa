@@ -251,7 +251,11 @@ class AppSettings extends ChangeNotifier {
       'en' => AppLang.en,
       _ => L10n.fromSystem(PlatformDispatcher.instance.locale.languageCode),
     });
-    Units.system = getString('units') == 'imperial' ? UnitSystem.imperial : UnitSystem.metric;
+    final units = getString('units') == 'imperial' ? UnitSystem.imperial : UnitSystem.metric;
+    if (units != Units.system) {
+      Units.system = units;
+      L10n.revision.value++; // screens repaint with the new units (a language change already does this)
+    }
   }
 
   void _syncTheme() {

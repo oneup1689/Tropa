@@ -241,8 +241,10 @@ Future<WeatherInfo?> fetchWeather(double lat, double lon, int startMs, int endMs
 /// Place name for the poster ("Ниньбинь, Вьетнам"); null without internet. BigDataCloud's free client
 /// endpoint first (no key, province + country in Russian), OpenStreetMap's Nominatim as a fallback.
 Future<String?> fetchPlaceName(double lat, double lon) async {
+  // The name follows the interface language (Russian or English).
+  final lang = L10n.current == AppLang.en ? 'en' : 'ru';
   final b = await _getJson(Uri.https('api.bigdatacloud.net', '/data/reverse-geocode-client', {
-    'latitude': lat.toStringAsFixed(5), 'longitude': lon.toStringAsFixed(5), 'localityLanguage': 'ru',
+    'latitude': lat.toStringAsFixed(5), 'longitude': lon.toStringAsFixed(5), 'localityLanguage': lang,
   }));
   if (b != null) {
     final region = (b['principalSubdivision'] as String?)?.trim() ?? '';
@@ -252,7 +254,7 @@ Future<String?> fetchPlaceName(double lat, double lon) async {
   }
   final j = await _getJson(Uri.https('nominatim.openstreetmap.org', '/reverse', {
     'format': 'jsonv2', 'lat': lat.toStringAsFixed(5), 'lon': lon.toStringAsFixed(5), 'zoom': '10',
-    'accept-language': 'ru',
+    'accept-language': lang,
   }));
   final a = j?['address'];
   if (a is! Map) return null;

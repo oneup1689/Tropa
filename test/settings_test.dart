@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tropa/l10n.dart';
 import 'package:tropa/modes.dart';
 import 'package:tropa/settings.dart';
+import 'package:tropa/units.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -34,6 +36,16 @@ void main() {
     await s.set('fix_interval_s', 5);
     expect(s.fixIntervalMsFor(TravelMode.car), 5000);
     await s.resetAdvanced();
+  });
+
+  test('changing only the units makes the screens repaint', () async {
+    final s = AppSettings.instance;
+    final before = L10n.revision.value;
+    await s.set('units', 'imperial');
+    expect(Units.imperial, isTrue);
+    expect(L10n.revision.value, greaterThan(before));
+    await s.set('units', 'metric');
+    expect(Units.imperial, isFalse);
   });
 
   test('travel mode is remembered', () async {

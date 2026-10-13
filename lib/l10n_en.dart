@@ -137,8 +137,8 @@ const Map<String, String> enStrings = {
   'Tropa записывает маршрут по GPS и без карты. Скачать её можно позже: пройденный путь ляжет на неё, им можно поделиться (GPX) или собрать постер.':
       'Tropa records your route by GPS even without a map. You can download one later: the walked path will be drawn on it, and you can share it (GPX) or make a poster.',
   'Не хватает места': 'Not enough space',
-  'Карта «{n}» займёт {a}, а на телефоне свободно {f}. Освободите место и попробуйте снова.':
-      'The map "{n}" needs {a}, but only {f} is free on the phone. Free up some space and try again.',
+  'Карте «{n}» нужно {a} (с небольшим запасом для системы), а на телефоне свободно {f}. Освободите место и попробуйте снова.':
+      'The map "{n}" needs {a} (with a small reserve for the system), but only {f} is free on the phone. Free up some space and try again.',
   'Wi-Fi не подключён': 'Wi-Fi is not connected',
   'Карта «{n}» весит {a}, а вы не в Wi-Fi: загрузка пойдёт по мобильному интернету. Скачать?':
       'The map "{n}" is {a} and you are not on Wi-Fi: it will download over mobile data. Download?',
@@ -275,7 +275,7 @@ const Map<String, String> enStrings = {
   'СКОРОСТЬ': 'SPEED',
   'ВЫСОТА': 'ELEVATION',
   'ПРОФИЛЬ ВЫСОТЫ': 'ELEVATION PROFILE',
-  'осадки {p} мм': 'rain {p} mm',
+  'осадки {p}': 'rain {p}',
   'без осадков': 'no rain',
   'ощущается {a}\nветер {b}\n{c}': 'feels like {a}\nwind {b}\n{c}',
   'ЗАМЕТКИ': 'NOTES',

@@ -67,8 +67,8 @@ Future<bool> offerDownload(
         context: context,
         builder: (c) => AlertDialog(
           title: Text(t('Не хватает места')),
-          content: Text(t('Карта «{n}» займёт {a}, а на телефоне свободно {f}. Освободите место и попробуйте снова.',
-              {'n': name, 'a': _mb(quote.fileBytes), 'f': _mb(free)})),
+          content: Text(t('Карте «{n}» нужно {a} (с небольшим запасом для системы), а на телефоне свободно {f}. Освободите место и попробуйте снова.',
+              {'n': name, 'a': _mb(need), 'f': _mb(free)})),
           actions: [FilledButton(onPressed: () => Navigator.pop(c), child: Text(t('Понятно')))],
         ),
       );

@@ -123,6 +123,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     rec.addListener(_onChange);
+    AppSettings.instance.addListener(_onChange); // e.g. Pro mode switched on: the menu shows the extra items
     var tick = 0;
     _ticker = Timer.periodic(Duration(seconds: 1), (_) {
       if (!rec.recording) return;
@@ -137,6 +138,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _ticker?.cancel();
     rec.removeListener(_onChange);
+    AppSettings.instance.removeListener(_onChange);
     super.dispose();
   }
 
@@ -817,7 +819,7 @@ class _HomePageState extends State<HomePage> {
                       const SizedBox(width: 5),
                       Flexible(
                         child: Text(
-                          sum == null ? t(mode.label) : '${t(mode.label)} · ${Units.dist(sum.distanceM, digits: 1)} · ${_duration(sum.totalSeconds)}',
+                          sum == null ? t(mode.label) : '${Units.dist(sum.distanceM, digits: 1)} · ${_duration(sum.totalSeconds)}',
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -832,7 +834,9 @@ class _HomePageState extends State<HomePage> {
                       Text(
                         s.status == 'active'
                             ? t('идёт запись')
-                            : (s.status == 'interrupted' ? t('прервана') : t('точек: {n}', {'n': s.pointCount})),
+                            : (s.status == 'interrupted'
+                                ? t('прервана')
+                                : '${sum == null ? '' : '${t(mode.label)} · '}${t('точек: {n}', {'n': s.pointCount})}'),
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                       ),
                     ]),
