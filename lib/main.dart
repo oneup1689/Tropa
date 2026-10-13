@@ -74,8 +74,9 @@ class TropaApp extends StatelessWidget {
       builder: (context, _, _) => ValueListenableBuilder<ThemeMode>(
         valueListenable: AppSettings.instance.themeNotifier,
         builder: (context, mode, _) => MaterialApp(
-          // A new key rebuilds every screen when the language changes.
-          key: ValueKey(L10n.current),
+          // No key here: a new key would rebuild the navigator and throw the person out of the Settings screen
+          // after changing the language. The home and settings screens listen to AppSettings and repaint themselves;
+          // other screens are opened after the language is chosen.
           title: 'Tropa',
           debugShowCheckedModeBanner: false,
           themeMode: mode,

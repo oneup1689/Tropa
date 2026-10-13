@@ -379,6 +379,7 @@ const Map<String, String> enStrings = {
   'Единицы измерения': 'Units',
   'Километры и метры': 'Kilometres and metres',
   'Мили и футы': 'Miles and feet',
+  'Выключено: километры и метры': 'Off: kilometres and metres',
   'Автозапись 24/7': 'Auto recording 24/7',
   'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. В остальное время GPS выключен и батарея почти не тратится.':
       'Recording starts by itself when you start walking and ends after a few minutes without movement. At other times GPS is off and the battery is hardly used.',

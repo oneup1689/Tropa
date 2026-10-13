@@ -41,15 +41,11 @@ void main() {
     expect([w(1), w(2)], ['region', 'regions']);
   });
 
-  test('imperial units have Russian labels in the Russian interface', () {
+  test('precipitation in millimetres or inches', () {
+    expect(Units.precip(1.5), '1.5 мм');
+    L10n.set(AppLang.en);
     Units.system = UnitSystem.imperial;
-    expect(Units.dist(1609.344, digits: 1), '1.0 ми');
-    expect(Units.speed(10), '22.4 ми/ч');
-    expect(Units.pace(10), '16:06 мин/ми');
-    expect(Units.shortDist(100), '328 фт');
-    expect(Units.precip(2.54), '0.10 дюйма');
-    Units.system = UnitSystem.metric;
-    expect(Units.precip(1.25), '1.3 мм'); // toStringAsFixed rounds half up on this value
+    expect(Units.precip(2.54), '0.10 in');
   });
 
   test('units: kilometres or miles, km/h or mph, min/km or min/mi, metres or feet', () {

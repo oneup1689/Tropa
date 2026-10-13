@@ -38,14 +38,20 @@ void main() {
     await s.resetAdvanced();
   });
 
-  test('changing only the units makes the screens repaint', () async {
+  test('miles exist only in the English interface and the switch repaints the screens', () async {
     final s = AppSettings.instance;
+    await s.set('language', 'en');
     final before = L10n.revision.value;
-    await s.set('units', 'imperial');
+    await s.set('imperial', true);
     expect(Units.imperial, isTrue);
     expect(L10n.revision.value, greaterThan(before));
-    await s.set('units', 'metric');
+    await s.set('language', 'ru'); // Russian is always metric, even with the switch on
     expect(Units.imperial, isFalse);
+    await s.set('language', 'en');
+    expect(Units.imperial, isTrue); // the choice is remembered
+    await s.set('imperial', false);
+    expect(Units.imperial, isFalse);
+    await s.set('language', 'auto');
   });
 
   test('travel mode is remembered', () async {

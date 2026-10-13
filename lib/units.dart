@@ -14,16 +14,14 @@ class Units {
   static const double _mile = 1609.344;
   static const double _foot = 0.3048;
 
-  static bool get _ru => L10n.current == AppLang.ru;
+  /// Imperial units exist only in the English interface (the Russian one is always metric), so they are English.
+  static String get kmUnit => imperial ? 'mi' : t('км');
 
-  /// The long distance unit: "км" or "mi" ("ми" in Russian).
-  static String get kmUnit => imperial ? (_ru ? 'ми' : 'mi') : t('км');
+  static String get shortDistUnit => imperial ? 'ft' : t('м');
 
-  static String get shortDistUnit => imperial ? (_ru ? 'фт' : 'ft') : t('м');
+  static String get speedUnit => imperial ? 'mph' : t('км/ч');
 
-  static String get speedUnit => imperial ? (_ru ? 'ми/ч' : 'mph') : t('км/ч');
-
-  static String get paceUnit => imperial ? (_ru ? 'мин/ми' : 'min/mi') : t('мин/км');
+  static String get paceUnit => imperial ? 'min/mi' : t('мин/км');
 
   static double toLong(double meters) => imperial ? meters / _mile : meters / 1000;
 
@@ -59,7 +57,7 @@ class Units {
 
   /// Precipitation from millimetres: "1.2 мм" / "0.05 in".
   static String precip(double mm) => imperial
-      ? '${(mm / 25.4).toStringAsFixed(2)} ${_ru ? 'дюйма' : 'in'}'
+      ? '${(mm / 25.4).toStringAsFixed(2)} in'
       : '${mm.toStringAsFixed(1)} ${t('мм')}';
 
   /// The pace without the unit ("15:08").

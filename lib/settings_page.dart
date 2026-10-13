@@ -26,7 +26,8 @@ class SettingsPage extends StatelessWidget {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
-        final visible = settingDefs.where((d) => s.pro || !d.proOnly).toList();
+        final english = L10n.current == AppLang.en;
+        final visible = settingDefs.where((d) => (s.pro || !d.proOnly) && (english || !d.englishOnly)).toList();
         final sections = <String>[];
         for (final d in visible) {
           if (!sections.contains(d.section)) sections.add(d.section);

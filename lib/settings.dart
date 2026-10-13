@@ -24,6 +24,9 @@ class SettingDef {
   final SettingKind kind;
   final Object defaultValue;
   final bool proOnly;
+
+  /// Shown only in the English interface (the Russian one is always metric).
+  final bool englishOnly;
   final List<(String, String)> options; // choice: (stored value, label)
   final double min;
   final double max;
@@ -41,6 +44,7 @@ class SettingDef {
     required this.defaultValue,
     this.subtitle = '',
     this.proOnly = false,
+    this.englishOnly = false,
     this.options = const [],
     this.min = 0,
     this.max = 0,
@@ -70,12 +74,13 @@ const List<SettingDef> settingDefs = [
     options: [('auto', 'Как в телефоне'), ('ru', 'Русский'), ('en', 'English')],
   ),
   SettingDef(
-    key: 'units',
-    title: 'Единицы измерения',
+    key: 'imperial',
+    title: 'Мили и футы',
+    subtitle: 'Выключено: километры и метры',
     section: 'Язык и единицы',
-    kind: SettingKind.choice,
-    defaultValue: 'metric',
-    options: [('metric', 'Километры и метры'), ('imperial', 'Мили и футы')],
+    kind: SettingKind.toggle,
+    defaultValue: false,
+    englishOnly: true,
   ),
   SettingDef(
     key: 'auto_mode',
@@ -251,7 +256,8 @@ class AppSettings extends ChangeNotifier {
       'en' => AppLang.en,
       _ => L10n.fromSystem(PlatformDispatcher.instance.locale.languageCode),
     });
-    final units = getString('units') == 'imperial' ? UnitSystem.imperial : UnitSystem.metric;
+    // Miles and feet exist only in the English interface; Russian is always kilometres and metres.
+    final units = L10n.current == AppLang.en && getBool('imperial') ? UnitSystem.imperial : UnitSystem.metric;
     if (units != Units.system) {
       Units.system = units;
       L10n.revision.value++; // screens repaint with the new units (a language change already does this)
@@ -282,7 +288,7 @@ class AppSettings extends ChangeNotifier {
   Future<void> set(String key, Object value) async {
     _values[key] = value;
     if (key == 'theme') _syncTheme();
-    if (key == 'language' || key == 'units') _syncLocale();
+    if (key == 'language' || key == 'imperial') _syncLocale();
     notifyListeners();
     await _save();
   }
