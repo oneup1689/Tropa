@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -13,7 +14,11 @@ import 'maps_page.dart';
 import 'modes.dart';
 import 'recorder.dart';
 import 'settings.dart';
-import 'share_dialog.dart';
+import 'poster.dart';
+import 'segments.dart';
+import 'poster_page.dart';
+import 'poster_wide.dart';
+import 'l10n.dart';
 
 /// Offline map with a recorded walk, an imported route, notes, or the live position.
 ///
@@ -29,13 +34,22 @@ class MapPage extends StatefulWidget {
   final String title;
   final TravelMode mode;
 
+  /// Set when the screen is only used to photograph the map for a poster: it frames the walk, takes
+  /// the snapshot and returns a [MapCapture] (or null when there is no map for the place).
+  final PosterOptions? posterCapture;
+
+  /// With [posterCapture]: several walks for a multi-route poster (the map frames all of them).
+  final List<int>? captureSessionIds;
+
   const MapPage({
     super.key,
     this.sessionId,
     this.routeId,
     this.live = false,
-    this.title = 'Карта',
+    this.title = '',
     this.mode = TravelMode.mixed,
+    this.posterCapture,
+    this.captureSessionIds,
   });
 
   @override
@@ -95,8 +109,13 @@ class _MapPageState extends State<MapPage> {
     super.dispose();
   }
 
-  Future<List<TrackPoint>> _sessionPoints() async =>
-      widget.sessionId == null ? const [] : await TrackDb.instance.points(widget.sessionId!);
+  Future<List<TrackPoint>> _sessionPoints() async {
+    final many = widget.captureSessionIds;
+    if (many != null) {
+      return [for (final id in many) ...await TrackDb.instance.points(id)];
+    }
+    return widget.sessionId == null ? const [] : await TrackDb.instance.points(widget.sessionId!);
+  }
 
   /// Picks the installed region that covers the walk (or the current position) and builds the style.
   Future<void> _prepare() async {
@@ -125,18 +144,23 @@ class _MapPageState extends State<MapPage> {
         region = all.first;
       }
       if (region == null) {
+        if (widget.posterCapture != null) {
+          if (mounted) Navigator.pop(context);
+          return;
+        }
         setState(() {
           _loading = false;
           _problem = all.isEmpty
-              ? (MapStore.lastListError ?? 'Нет загруженных карт. Добавьте файл карты в разделе «Карты».')
-              : 'Для этого места нет карты. Загруженные регионы не покрывают его.';
+              ? (MapStore.lastListError ?? t('Нет загруженных карт. Добавьте файл карты в разделе «Карты».'))
+              : t('Для этого места нет карты. Загруженные регионы не покрывают его.');
         });
         return;
       }
       if (!mounted) return;
-      final dark = Theme.of(context).brightness == Brightness.dark;
+      final capture = widget.posterCapture;
+      final dark = capture != null ? capture.darkMap : Theme.of(context).brightness == Brightness.dark;
       final chosen = region;
-      final overlay = await _buildOverlay(pts);
+      final overlay = capture != null ? _Overlay(_fc(const []), _fc(const []), _fc(const []), _fc(const []), _fc(const []), const []) : await _buildOverlay(pts);
       final path = await MapStore.writeStyleWithOverlay(
         chosen,
         dark: dark,
@@ -151,7 +175,7 @@ class _MapPageState extends State<MapPage> {
           ])
             id: {'type': 'geojson', 'data': fc},
         },
-        layers: _overlayLayers(),
+        layers: capture != null ? const [] : _overlayLayers(),
       );
       final b = chosen.bounds;
       setState(() {
@@ -169,7 +193,7 @@ class _MapPageState extends State<MapPage> {
       DebugLog.instance.log('MAP', 'prepare failed: $e\n$st');
       setState(() {
         _loading = false;
-        _problem = 'Не удалось подготовить карту: $e';
+        _problem = t('Не удалось подготовить карту: {p0}', {'p0': e});
       });
     }
   }
@@ -196,7 +220,17 @@ class _MapPageState extends State<MapPage> {
     return [
       line('route', '#1E88E5', 5, 0.85),
       line('gaps', '#E53935', 1.5, 0.4),
-      line('track', '#E53935', 4.5),
+      {
+        'id': 'tropa-track',
+        'type': 'line',
+        'source': 'track',
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {
+          'line-color': ['coalesce', ['get', 'color'], '#E53935'],
+          'line-width': 4.5,
+          'line-opacity': 1,
+        },
+      },
       line('restored', '#FB8C00', 4.5),
       dots('marks'),
       dots('me'),
@@ -239,15 +273,44 @@ class _MapPageState extends State<MapPage> {
 
     if (widget.sessionId != null && pts.isNotEmpty) {
       final result = analyzeGaps(pts, settings: AppSettings.instance.healFor(widget.mode));
+
+      // The way of travelling of every point (walk / vehicle / bike / water): the line changes colour where it
+      // changes, with a labelled marker. A live map has no finished walk to split, so it stays one colour.
+      final modeAt = List<TravelMode?>.filled(pts.length, null);
+      final segments = widget.live
+          ? const <TrackSegment>[]
+          : buildSegments(pts, widget.mode, overrides: await TrackDb.instance.segmentOverrides(widget.sessionId!));
+      for (final s in segments) {
+        for (var i = s.startIdx; i <= s.endIdx && i < pts.length; i++) {
+          modeAt[i] = s.mode;
+        }
+      }
+      final multiMode = segments.map((s) => s.mode).toSet().length > 1;
       var seg = <LatLng>[];
+      var segMode = modeAt.isEmpty ? null : modeAt.first;
       void flush() {
-        if (seg.length >= 2) track.add(_lineFeature(List.of(seg)));
+        if (seg.length >= 2) {
+          final f = _lineFeature(List.of(seg));
+          if (multiMode && segMode != null) (f['properties'] as Map<String, Object?>)['color'] = _modeHex(segMode);
+          track.add(f);
+        }
         seg = <LatLng>[];
       }
 
       for (var i = 0; i < pts.length; i++) {
         final here = LatLng(pts[i].lat, pts[i].lon);
         all.add(here);
+        if (multiMode && i > 0 && modeAt[i] != segMode) {
+          // The mode changes here: close the line (it shares this point with the next one) and mark the change.
+          seg.add(here);
+          flush();
+          final next = modeAt[i];
+          segMode = next;
+          seg = <LatLng>[here];
+          if (next != null) marks.add(_pointFeature(here, color: _modeHex(next), radius: 6, label: t(next.label)));
+          continue;
+        }
+        segMode = modeAt[i] ?? segMode;
         final gap = i > 0 ? result.gapAt(i) : null;
         if (gap == null) {
           seg.add(here);
@@ -271,7 +334,7 @@ class _MapPageState extends State<MapPage> {
       if (!widget.live) marks.add(_pointFeature(LatLng(pts.last.lat, pts.last.lon)));
       for (final n in await TrackDb.instance.notes(widget.sessionId!)) {
         marks.add(_pointFeature(LatLng(n.lat, n.lon),
-            color: '#8E24AA', radius: 7, label: n.text.isNotEmpty ? n.text : (n.mediaType == 'video' ? 'видео' : 'фото')));
+            color: '#8E24AA', radius: 7, label: n.text.isNotEmpty ? n.text : (n.mediaType == 'video' ? t('видео') : t('фото'))));
       }
     }
     return _Overlay(_fc(track), _fc(restored), _fc(gaps), route, _fc(marks), all);
@@ -292,6 +355,10 @@ class _MapPageState extends State<MapPage> {
   Future<void> _onStyleLoaded() async {
     final c = _controller;
     if (c == null) return;
+    if (widget.posterCapture != null) {
+      await _capturePosterMap(c);
+      return;
+    }
     if (widget.live) {
       _liveTimer = Timer.periodic(const Duration(seconds: 2), (_) => _tickLive());
       _tickLive();
@@ -301,41 +368,6 @@ class _MapPageState extends State<MapPage> {
     if (b != null) {
       await c.animateCamera(CameraUpdate.newLatLngBounds(b, left: 40, right: 40, top: 60, bottom: 60));
     }
-  }
-
-  /// Camera (centre, zoom) that frames [pts] in the band y = 360..1120 of a 1080x1920 picture.
-  (LatLng, double)? _fitForSnapshot(List<LatLng> pts) {
-    final b = _bounds(pts);
-    if (b == null) return null;
-    const size = 512.0; // MapLibre uses 512 px world tiles, so zoom z spans 512 * 2^z pixels
-    double lonToX(double lon, double z) => (lon + 180) / 360 * size * math.pow(2, z);
-    double latToY(double lat, double z) {
-      final s = math.sin(lat * math.pi / 180);
-      return (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * size * math.pow(2, z);
-    }
-
-    double yToLat(double y, double z) {
-      final n = math.pi - 2 * math.pi * y / (size * math.pow(2, z));
-      return 180 / math.pi * math.atan(0.5 * (math.exp(n) - math.exp(-n)));
-    }
-
-    // The route must stay clear of the title (top) and of up to four statistics (from y ~ 1010 down).
-    const availW = 900.0, availH = 610.0;
-    // Zoom at which the bounds fill the available band.
-    var z = 18.0;
-    while (z > 3) {
-      final w = (lonToX(b.northeast.longitude, z) - lonToX(b.southwest.longitude, z)).abs();
-      final h = (latToY(b.southwest.latitude, z) - latToY(b.northeast.latitude, z)).abs();
-      if (w <= availW && h <= availH) break;
-      z -= 0.25;
-    }
-    final cx = (lonToX(b.northeast.longitude, z) + lonToX(b.southwest.longitude, z)) / 2;
-    final cy = (latToY(b.northeast.latitude, z) + latToY(b.southwest.latitude, z)) / 2;
-    // The band (y = 340..950) is centred at y = 645 while the picture centre is at y = 960: move the camera
-    // centre south by the difference.
-    final camY = cy + (960 - 645);
-    final lon = cx / (size * math.pow(2, z)) * 360 - 180;
-    return (LatLng(yToLat(camY, z), lon), z);
   }
 
   /// Live mode: redraw the recorded part and keep the camera on the current position.
@@ -356,56 +388,36 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  /// Picture for social networks: the plugin's snapshotter renders the map (with the route, because the
-  /// route is part of the style) and the statistics are drawn on top.
-  Future<void> _shareImage() async {
-    final c = _controller;
-    if (c == null) return;
-    final options = await askShareOptions(context);
-    if (options == null || !mounted) return;
+  /// Poster background: frames the walk the way the poster expects, waits for the tiles and takes a
+  /// high-resolution snapshot of the bare map. The route itself is drawn by the poster code on top.
+  Future<void> _capturePosterMap(MapLibreMapController c) async {
     try {
-      // The snapshot is 1080x1920 pixels, so frame the route for that size: it goes into the free band
-      // between the title (top) and the statistics (bottom), then wait for the tiles.
-      final fit = _fitForSnapshot(_overlay?.bounds ?? const []);
-      if (fit != null) {
-        await c.moveCamera(CameraUpdate.newLatLngZoom(fit.$1, fit.$2));
-        await Future<void>.delayed(const Duration(milliseconds: 900));
-      }
-      // Restored gaps look like the rest of the route unless the user asked to highlight them.
-      final overlay = _overlay;
-      final blend = !options.showRestored && overlay != null;
-      if (blend) {
-        final features = [
-          ...(overlay.track['features'] as List<Object?>),
-          ...(overlay.restored['features'] as List<Object?>),
-        ].cast<Map<String, Object?>>();
-        await c.setGeoJsonSource('track', _fc(features));
-        await c.setLayerVisibility('tropa-restored', false);
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-      }
-      final Uint8List map;
-      try {
-        map = await c.takeSnapshot(width: 1080, height: 1920);
-      } finally {
-        if (blend) {
-          await c.setGeoJsonSource('track', overlay.track);
-          await c.setLayerVisibility('tropa-restored', true);
-        }
-      }
+      final o = widget.posterCapture!;
+      final wide = o.format == PosterFormat.horizontal;
+      // Snapshot of the whole poster canvas at 2x: 2160x3840 (vertical) or 3600x2400 (horizontal).
+      final widthPx = wide ? 3600 : 2160, heightPx = wide ? 2400 : 3840;
       final pts = await _sessionPoints();
-      await shareRouteImage(
-        title: widget.title,
-        pts: pts,
-        mode: widget.mode,
-        options: options,
-        mapPng: map,
-        fileName: 'tropa_${widget.sessionId}',
-      );
-    } catch (e) {
-      DebugLog.instance.log('MAP', 'share image failed: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось создать картинку: $e')));
+      final (i0, i1) = posterShownRange(pts, o.hideEnds);
+      final cam = wide
+          ? posterCamera(pts, widthPx: widthPx, i0: i0, i1: i1, canvas: const Size(wideW, wideH), area: wideRouteArea)
+          : posterCamera(pts, widthPx: widthPx, i0: i0, i1: i1);
+      if (cam == null) {
+        if (mounted) Navigator.pop(context);
+        return;
       }
+      await c.moveCamera(CameraUpdate.newLatLngZoom(LatLng(cam.lat, cam.lon), cam.zoom));
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      final png = await c.takeSnapshot(width: widthPx, height: heightPx);
+      final img = (await (await ui.instantiateImageCodec(png)).getNextFrame()).image;
+      // If the snapshotter used a pixel ratio, the picture is bigger than requested: the zoom (which is
+      // measured in logical pixels) grows by log2 of that ratio for the projection in pixels.
+      final ratio = img.width / widthPx;
+      final zoomPx = cam.zoom + math.log(ratio) / math.ln2;
+      DebugLog.instance.log('POSTER', 'map snapshot ${img.width}x${img.height} zoom=${cam.zoom.toStringAsFixed(2)}');
+      if (mounted) Navigator.pop(context, MapCapture(png, cam.lat, cam.lon, zoomPx, img.width, img.height));
+    } catch (e, st) {
+      DebugLog.instance.log('MAP', 'poster snapshot failed: $e\n$st');
+      if (mounted) Navigator.pop(context);
     }
   }
 
@@ -413,17 +425,22 @@ class _MapPageState extends State<MapPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title),
+        title: Text(widget.title.isEmpty ? t('Карта') : widget.title),
         actions: [
-          if (widget.sessionId != null && _stylePath != null)
+          if (widget.sessionId != null && _stylePath != null && widget.posterCapture == null)
             IconButton(
               icon: const Icon(Icons.image_outlined),
-              tooltip: 'Картинка для соцсетей',
-              onPressed: _shareImage,
+              tooltip: t('Постер'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PosterPage(sessionId: widget.sessionId!, title: widget.title, mode: widget.mode),
+                ),
+              ),
             ),
           IconButton(
             icon: const Icon(Icons.map_outlined),
-            tooltip: 'Карты',
+            tooltip: t('Карты'),
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage())),
           ),
         ],
@@ -435,11 +452,11 @@ class _MapPageState extends State<MapPage> {
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text(_problem ?? 'Карта недоступна', textAlign: TextAlign.center),
+                      Text(_problem ?? t('Карта недоступна'), textAlign: TextAlign.center),
                       const SizedBox(height: 16),
                       FilledButton(
                         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage())),
-                        child: const Text('Открыть «Карты»'),
+                        child: Text(t('Открыть «Карты»')),
                       ),
                     ]),
                   ),
@@ -475,3 +492,12 @@ class _MapPageState extends State<MapPage> {
     );
   }
 }
+
+/// Colour of a way of travelling on the map (the same as in the route preview).
+String _modeHex(TravelMode m) => switch (m) {
+      TravelMode.walk => '#2E7D32',
+      TravelMode.bike => '#1565C0',
+      TravelMode.car => '#EF6C00',
+      TravelMode.water => '#00ACC1',
+      TravelMode.mixed => '#6D4C41',
+    };

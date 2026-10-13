@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'debug_log.dart';
+import 'map_downloads.dart';
+import 'l10n.dart';
 
 /// Geographic bounds stored in the header of a .pmtiles file.
 class RegionBounds {
@@ -21,9 +23,12 @@ class MapRegion {
   final File file;
   final RegionBounds? bounds;
 
-  const MapRegion(this.file, this.bounds);
+  /// Present for maps downloaded in the app (name, area, date of the data); null for files copied by hand.
+  final RegionMeta? meta;
 
-  String get name => p.basenameWithoutExtension(file.path);
+  const MapRegion(this.file, this.bounds, [this.meta]);
+
+  String get name => meta?.name ?? p.basenameWithoutExtension(file.path);
   int get sizeBytes => file.lengthSync();
 }
 
@@ -54,12 +59,12 @@ class MapStore {
     final out = <MapRegion>[];
     try {
       await for (final e in dir.list()) {
-        if (e is File && e.path.toLowerCase().endsWith('.pmtiles')) out.add(MapRegion(e, await readBounds(e)));
+        if (e is File && e.path.toLowerCase().endsWith('.pmtiles')) out.add(MapRegion(e, await readBounds(e), await readRegionMeta(e)));
       }
     } on FileSystemException catch (e) {
       // The folder exists but cannot be read (e.g. created by another user): report instead of crashing.
       DebugLog.instance.log('MAP', 'cannot list ${dir.path}: $e');
-      lastListError = 'Нет доступа к папке с картами: ${e.osError?.message ?? e.message}';
+      lastListError = t('Нет доступа к папке с картами: {p0}', {'p0': e.osError?.message ?? e.message});
       return out;
     }
     lastListError = null;
@@ -110,6 +115,8 @@ class MapStore {
 
   static Future<void> deleteRegion(MapRegion r) async {
     await r.file.delete();
+    final meta = metaFileFor(r.file);
+    if (await meta.exists()) await meta.delete();
   }
 
   // ------------------------------------------------------------ style and fonts
