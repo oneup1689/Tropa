@@ -83,6 +83,17 @@ const List<SettingDef> settingDefs = [
     englishOnly: true,
   ),
   SettingDef(
+    key: 'temp_unit',
+    title: 'Температура',
+    subtitle: 'Можно оставить °C при милях (или наоборот)',
+    section: 'Язык и единицы',
+    kind: SettingKind.choice,
+    defaultValue: 'auto',
+    proOnly: true,
+    englishOnly: true,
+    options: [('auto', 'Как расстояния'), ('c', '°C'), ('f', '°F')],
+  ),
+  SettingDef(
     key: 'auto_mode',
     title: 'Автозапись 24/7',
     subtitle: 'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. '
@@ -257,9 +268,14 @@ class AppSettings extends ChangeNotifier {
       _ => L10n.fromSystem(PlatformDispatcher.instance.locale.languageCode),
     });
     // Miles and feet exist only in the English interface; Russian is always kilometres and metres.
-    final units = L10n.current == AppLang.en && getBool('imperial') ? UnitSystem.imperial : UnitSystem.metric;
-    if (units != Units.system) {
+    final english = L10n.current == AppLang.en;
+    final units = english && getBool('imperial') ? UnitSystem.imperial : UnitSystem.metric;
+    // Pro: the temperature unit can differ from the distance units ('auto' = follows them).
+    final tempUnit = english ? getString('temp_unit') : 'auto';
+    final bool? fahrenheit = tempUnit == 'f' ? true : (tempUnit == 'c' ? false : null);
+    if (units != Units.system || fahrenheit != Units.fahrenheitOverride) {
       Units.system = units;
+      Units.fahrenheitOverride = fahrenheit;
       L10n.revision.value++; // screens repaint with the new units (a language change already does this)
     }
   }
@@ -288,7 +304,7 @@ class AppSettings extends ChangeNotifier {
   Future<void> set(String key, Object value) async {
     _values[key] = value;
     if (key == 'theme') _syncTheme();
-    if (key == 'language' || key == 'imperial') _syncLocale();
+    if (key == 'language' || key == 'imperial' || key == 'temp_unit') _syncLocale();
     notifyListeners();
     await _save();
   }

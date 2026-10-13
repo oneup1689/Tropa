@@ -51,9 +51,14 @@ class Units {
     return '${carry ? m + 1 : m}:${(carry ? 0 : s).toString().padLeft(2, '0')} $paceUnit';
   }
 
+  /// Pro setting: temperature unit chosen separately from miles (null = follows the distance units).
+  static bool? fahrenheitOverride;
+
+  static bool get fahrenheit => fahrenheitOverride ?? imperial;
+
   /// Temperature: "29°" or "84°F".
   static String temp(double celsius, {int digits = 0}) =>
-      imperial ? '${(celsius * 9 / 5 + 32).toStringAsFixed(digits)}°F' : '${celsius.toStringAsFixed(digits)}°'; // °F is the same in both languages
+      fahrenheit ? '${(celsius * 9 / 5 + 32).toStringAsFixed(digits)}°F' : '${celsius.toStringAsFixed(digits)}°'; // °F is the same in both languages
 
   /// Precipitation from millimetres: "1.2 мм" / "0.05 in".
   static String precip(double mm) => imperial

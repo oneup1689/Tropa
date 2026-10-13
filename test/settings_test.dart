@@ -54,6 +54,24 @@ void main() {
     await s.set('language', 'auto');
   });
 
+  test('Pro: temperature unit can differ from the distance units', () async {
+    final s = AppSettings.instance;
+    await s.set('language', 'en');
+    await s.set('imperial', true);
+    expect(Units.temp(20), '68°F'); // amateur: follows miles
+    await s.set('temp_unit', 'c');
+    expect(Units.temp(20), '20°'); // miles with Celsius
+    await s.set('imperial', false);
+    await s.set('temp_unit', 'f');
+    expect(Units.temp(20), '68°F'); // kilometres with Fahrenheit
+    await s.set('language', 'ru');
+    expect(Units.temp(20), '20°'); // Russian is always Celsius
+    await s.set('language', 'en');
+    await s.set('temp_unit', 'auto');
+    expect(Units.temp(20), '20°');
+    await s.set('language', 'auto');
+  });
+
   test('travel mode is remembered', () async {
     final s = AppSettings.instance;
     expect(s.travelMode, TravelMode.mixed); // default
