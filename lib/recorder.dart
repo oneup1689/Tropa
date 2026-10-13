@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart' show Permission, Per
 
 import 'db.dart';
 import 'debug_log.dart';
+import 'l10n.dart';
 import 'modes.dart';
 import 'settings.dart';
 
@@ -45,6 +46,9 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   int movingSeconds = 0;
   bool autoPaused = false;
 
+  /// Pause button: nothing is recorded until the person walks on (>20 m) or presses "continue".
+  bool manualPause = false;
+
   /// 24/7 mode: the service waits for movement. Last known position and the distance to the
   /// loaded route (-1 when there is no route) come from the native service.
   bool watching = false;
@@ -74,6 +78,9 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> init() async {
     WidgetsBinding.instance.addObserver(this);
+    // The native service writes its notifications in the language of the app.
+    L10n.revision.addListener(_sendLanguage);
+    _sendLanguage();
     _watchModes();
     if (Platform.isAndroid) {
       await _refresh();
@@ -94,6 +101,10 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       _log.log('RECOVERY', 'native service is already recording session=$sessionId, UI attached');
     }
     await _logEnvironment();
+  }
+
+  void _sendLanguage() {
+    if (Platform.isAndroid) _sys.invokeMethod<void>('setLanguage', {'code': L10n.code}).catchError((Object _) {});
   }
 
   Future<void> _refresh() async {
@@ -120,7 +131,9 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       sinceFixSec = since;
       final movingSec = ((m['movingMs'] as num?)?.toInt() ?? 0) ~/ 1000;
       final paused = m['paused'] == true;
-      final timeChanged = movingSec != movingSeconds || paused != autoPaused;
+      final manual = m['manualPause'] == true;
+      final timeChanged = movingSec != movingSeconds || paused != autoPaused || manual != manualPause;
+      manualPause = manual;
       movingSeconds = movingSec;
       autoPaused = paused;
       final isWatching = m['watching'] == true;
@@ -223,6 +236,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
         'idleMinutes': AppSettings.instance.idleMinutes,
         'offRouteM': AppSettings.instance.offRouteMeters,
         'routeId': routeId ?? 0,
+        'lang': L10n.code,
       };
 
   /// Applies the "Автозапись 24/7" setting: starts or stops the movement watcher.
@@ -269,6 +283,21 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       return recording;
     }
     return _startDart(resumeSessionId, mode);
+  }
+
+  /// Manual pause (Android). The service keeps a slow GPS watch and resumes by itself after ~20 m.
+  Future<void> pause() async {
+    if (!Platform.isAndroid || !recording) return;
+    _log.log('PAUSE', 'UI requested pause');
+    await _sys.invokeMethod('pauseTracking');
+    await _refresh();
+  }
+
+  Future<void> resume() async {
+    if (!Platform.isAndroid || !recording) return;
+    _log.log('PAUSE', 'UI requested resume');
+    await _sys.invokeMethod('resumeTracking');
+    await _refresh();
   }
 
   Future<void> stop() async {

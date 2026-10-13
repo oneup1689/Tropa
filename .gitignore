@@ -59,3 +59,7 @@ hs_err_pid*.log
 
 # large map data and tools
 data/
+
+# Personal test data lives in the private repo tropa-testdata
+test/*.jpeg
+test/*.jpg

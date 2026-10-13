@@ -1,12 +1,15 @@
+import 'l10n.dart';
 /// How the person travels. Drives filters, GPS rate, gap-healing limits and statistics.
-enum TravelMode { walk, bike, car, mixed }
+/// [car] means any motor transport (car, scooter); [water] is rafting, kayaking and boats.
+enum TravelMode { walk, bike, car, water, mixed }
 
 extension TravelModeInfo on TravelMode {
   String get label => switch (this) {
-        TravelMode.walk => 'Пешком',
-        TravelMode.bike => 'Велосипед',
-        TravelMode.car => 'Авто',
-        TravelMode.mixed => 'Смешанный',
+        TravelMode.walk => t('Пешком'),
+        TravelMode.bike => t('Велосипед'),
+        TravelMode.car => t('Транспорт'),
+        TravelMode.water => t('Сплав / вода'),
+        TravelMode.mixed => t('Смешанный'),
       };
 
   /// Value stored in the database.
@@ -34,5 +37,6 @@ ModeProfile profileOf(TravelMode m) => switch (m) {
       TravelMode.walk => const ModeProfile(2000, 10, 0.4),
       TravelMode.bike => const ModeProfile(2000, 25, 0.8),
       TravelMode.car => const ModeProfile(1000, 70, 2.0),
+      TravelMode.water => const ModeProfile(2000, 15, 0.3),
       TravelMode.mixed => const ModeProfile(2000, 70, 0.5),
     };

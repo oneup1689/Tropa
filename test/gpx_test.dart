@@ -32,6 +32,7 @@ void main() {
 
     test('very long gap is kept as a break', () {
       expect(classifyGap(100, 30 * 60, s), GapKind.keepBreak);
+      expect(classifyGap(10, 50 * 60, s), GapKind.glueStill); // long stop in one place loses nothing
     });
   });
 

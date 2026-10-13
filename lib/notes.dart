@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'db.dart';
 import 'debug_log.dart';
 import 'recorder.dart';
+import 'l10n.dart';
 
 /// Photos and videos go to the phone gallery (album "Tropa"), not into the app's own storage,
 /// so they do not bloat the app. The database keeps only the text and the file name.
@@ -60,18 +61,18 @@ Future<bool> showNoteSheet(BuildContext context) async {
       builder: (c, setS) => Padding(
         padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(c).viewInsets.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Заметка к этому месту', style: Theme.of(c).textTheme.titleMedium),
+          Text(t('Заметка к этому месту'), style: Theme.of(c).textTheme.titleMedium),
           const SizedBox(height: 8),
           TextField(
             controller: ctl,
             maxLines: 3,
-            decoration: const InputDecoration(hintText: 'Текст (необязательно)', border: OutlineInputBorder()),
+            decoration: InputDecoration(hintText: t('Текст (необязательно)'), border: OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
             ActionChip(
               avatar: const Icon(Icons.photo_camera),
-              label: const Text('Фото'),
+              label: Text(t('Фото')),
               onPressed: () async {
                 final m = await captureMedia(video: false);
                 if (m != null) setS(() => media = m);
@@ -79,7 +80,7 @@ Future<bool> showNoteSheet(BuildContext context) async {
             ),
             ActionChip(
               avatar: const Icon(Icons.videocam),
-              label: const Text('Видео'),
+              label: Text(t('Видео')),
               onPressed: () async {
                 final m = await captureMedia(video: true);
                 if (m != null) setS(() => media = m);
@@ -89,13 +90,13 @@ Future<bool> showNoteSheet(BuildContext context) async {
           if (media != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text('${media!.type == 'photo' ? 'Фото' : 'Видео'} сохранено в галерею (альбом Tropa)'),
+              child: Text(t('{k} сохранено в галерею (альбом Tropa)', {'k': media!.type == 'photo' ? t('Фото') : t('Видео')})),
             ),
           const SizedBox(height: 12),
           FilledButton(
             onPressed: () => Navigator.pop(c, true),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-            child: const Text('Сохранить заметку'),
+            child: Text(t('Сохранить заметку')),
           ),
         ]),
       ),

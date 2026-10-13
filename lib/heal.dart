@@ -58,7 +58,7 @@ class HealSettings {
     final walk = walkLimitOverride != null && walkLimitOverride > 0 ? walkLimitOverride : 150.0;
     final allowed = switch (mode) {
       TravelMode.walk => const {Activity.walk},
-      TravelMode.bike => const {Activity.walk, Activity.bike},
+      TravelMode.bike || TravelMode.water => const {Activity.walk, Activity.bike},
       TravelMode.car || TravelMode.mixed => const {Activity.walk, Activity.bike, Activity.car},
     };
     return HealSettings(walkLimit: walk, allowed: allowed);
@@ -144,8 +144,9 @@ double haversine(double lat1, double lon1, double lat2, double lon2) {
 }
 
 GapKind classifyGap(double meters, int seconds, HealSettings s) {
-  if (seconds > s.longGapSeconds) return GapKind.keepBreak;
+  // Same place before and after: nothing was lost, however long the recording paused (a long stop, lunch).
   if (meters <= s.stillMeters) return GapKind.glueStill;
+  if (seconds > s.longGapSeconds) return GapKind.keepBreak;
   final activity = s.activityForSpeed(meters / math.max(seconds, 1));
   // Too fast for any activity, or not something this travel mode would do: leave it open.
   if (activity == null || !s.allowed.contains(activity)) return GapKind.keepBreak;

@@ -3,6 +3,9 @@ import 'dart:math' as math;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'modes.dart';
+import 'segments.dart';
+
 class TrackPoint {
   final int tsMs;
   final double lat;
@@ -64,7 +67,7 @@ class TrackDb {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'tropa.db'),
-      version: 3,
+      version: 6,
       onUpgrade: (db, oldVersion, _) async {
         // The native service may already have added some columns; ignore duplicates.
         if (oldVersion < 2) {
@@ -77,6 +80,12 @@ class TrackDb {
             await db.execute('ALTER TABLE points ADD COLUMN pressure REAL');
           } catch (_) {}
           await _createExtraTables(db);
+        }
+        if (oldVersion < 5) await _createExtraTables(db);
+        if (oldVersion < 6) {
+          try {
+            await db.execute('ALTER TABLE session_meta ADD COLUMN elevation TEXT');
+          } catch (_) {}
         }
       },
       onCreate: (db, _) async {
@@ -99,6 +108,11 @@ class TrackDb {
         'id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, ts_ms INTEGER NOT NULL, '
         "lat REAL NOT NULL, lon REAL NOT NULL, text TEXT NOT NULL DEFAULT '', "
         "media_type TEXT NOT NULL DEFAULT '', media_name TEXT NOT NULL DEFAULT '')");
+    await db.execute('CREATE TABLE IF NOT EXISTS segment_overrides('
+        'session_id INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, mode TEXT NOT NULL)');
+    // Poster data fetched from the internet once and kept: place name, weather (JSON), manual water temperature.
+    await db.execute('CREATE TABLE IF NOT EXISTS session_meta('
+        'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT)');
     await db.execute('CREATE TABLE IF NOT EXISTS routes('
         'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL)');
     await db.execute('CREATE TABLE IF NOT EXISTS route_points('
@@ -200,6 +214,8 @@ class TrackDb {
     final db = await database;
     await db.delete('points', where: 'session_id = ?', whereArgs: [id]);
     await db.delete('notes', where: 'session_id = ?', whereArgs: [id]);
+    await db.delete('segment_overrides', where: 'session_id = ?', whereArgs: [id]);
+    await db.delete('session_meta', where: 'session_id = ?', whereArgs: [id]);
     await db.delete('sessions', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -244,9 +260,58 @@ class TrackDb {
     ];
   }
 
+  Future<void> updateNoteText(int id, String text) async {
+    final db = await database;
+    await db.update('notes', {'text': text}, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> updateNoteMedia(int id, String type, String name) async {
+    final db = await database;
+    await db.update('notes', {'media_type': type, 'media_name': name}, where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> deleteNote(int id) async {
     final db = await database;
     await db.delete('notes', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------------------------------------------------------------- poster metadata
+
+  Future<Map<String, Object?>> sessionMeta(int sessionId) async {
+    final db = await database;
+    final rows = await db.query('session_meta', where: 'session_id = ?', whereArgs: [sessionId]);
+    return rows.isEmpty ? <String, Object?>{} : Map<String, Object?>.of(rows.first);
+  }
+
+  /// Updates the given columns (region, weather, water_temp) and keeps the others.
+  Future<void> setSessionMeta(int sessionId, Map<String, Object?> values) async {
+    final db = await database;
+    final existing = await db.query('session_meta', where: 'session_id = ?', whereArgs: [sessionId]);
+    if (existing.isEmpty) {
+      await db.insert('session_meta', {'session_id': sessionId, ...values});
+    } else {
+      await db.update('session_meta', values, where: 'session_id = ?', whereArgs: [sessionId]);
+    }
+  }
+
+  // ---------------------------------------------------------------- manual mode corrections
+
+  Future<List<SegmentOverride>> segmentOverrides(int sessionId) async {
+    final db = await database;
+    final rows = await db.query('segment_overrides', where: 'session_id = ?', whereArgs: [sessionId]);
+    return [
+      for (final r in rows)
+        SegmentOverride(r['start_ms'] as int, r['end_ms'] as int, TravelModeInfo.parse(r['mode'] as String?)),
+    ];
+  }
+
+  /// Stores a correction; older corrections that overlap the same time range are replaced.
+  Future<void> setSegmentOverride(int sessionId, int startMs, int endMs, TravelMode mode) async {
+    final db = await database;
+    await db.delete('segment_overrides',
+        where: 'session_id = ? AND start_ms < ? AND end_ms > ?', whereArgs: [sessionId, endMs, startMs]);
+    await db.insert('segment_overrides',
+        {'session_id': sessionId, 'start_ms': startMs, 'end_ms': endMs, 'mode': mode.code});
   }
 
   // ---------------------------------------------------------------- imported routes

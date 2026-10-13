@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'db.dart';
 import 'gpx.dart';
+import 'modes.dart';
+import 'l10n.dart';
 
 /// One archive with everything: a JSON copy of all walks, notes and imported routes (for restoring)
 /// plus a GPX file per walk (for opening in any other app). Photos and videos stay in the gallery.
@@ -43,6 +45,7 @@ Future<BackupResult> exportBackup() async {
   for (final s in sessions) {
     final pts = await db.points(s.id);
     final notes = await db.notes(s.id);
+    final overrides = await db.segmentOverrides(s.id);
     totalPoints += pts.length;
     sessionList.add({
       'startMs': s.startMs,
@@ -52,6 +55,9 @@ Future<BackupResult> exportBackup() async {
       // [ts, lat, lon, accuracy, altitude, speed, pressure]
       'points': [
         for (final t in pts) [t.tsMs, t.lat, t.lon, t.accuracy, t.altitude, t.speed, t.pressure],
+      ],
+      'segments': [
+        for (final o in overrides) {'start': o.startMs, 'end': o.endMs, 'mode': o.mode.code},
       ],
       'notes': [
         for (final n in notes)
@@ -92,9 +98,9 @@ Future<BackupResult> exportBackup() async {
 Future<RestoreResult> importBackup(File file) async {
   final archive = ZipDecoder().decodeBytes(await file.readAsBytes());
   final entry = archive.findFile('data.json');
-  if (entry == null) throw const FormatException('Это не резервная копия Tropa: нет data.json');
+  if (entry == null) throw FormatException(t('Это не резервная копия Tropa: нет data.json'));
   final data = jsonDecode(utf8.decode(entry.content as List<int>)) as Map<String, dynamic>;
-  if (data['format'] != 'tropa-backup') throw const FormatException('Неизвестный формат файла');
+  if (data['format'] != 'tropa-backup') throw FormatException(t('Неизвестный формат файла'));
 
   final db = await TrackDb.instance.database;
   final existing = <int>{
@@ -142,6 +148,11 @@ Future<RestoreResult> importBackup(File file) async {
           'media_name': nm['name'] ?? '',
         });
         noteCount++;
+      }
+      for (final o in (m['segments'] as List<dynamic>? ?? const [])) {
+        final om = o as Map<String, dynamic>;
+        batch.insert('segment_overrides',
+            {'session_id': id, 'start_ms': om['start'], 'end_ms': om['end'], 'mode': om['mode']});
       }
       await batch.commit(noResult: true);
     });

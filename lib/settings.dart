@@ -1,12 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'heal.dart';
+import 'l10n.dart';
 import 'modes.dart';
+import 'units.dart';
 
 enum SettingKind { toggle, choice, number }
 
@@ -58,6 +61,22 @@ const List<SettingDef> settingDefs = [
     options: [('system', 'Как на смартфоне'), ('light', 'Светлая'), ('dark', 'Тёмная')],
   ),
   SettingDef(
+    key: 'language',
+    title: 'Язык',
+    section: 'Язык и единицы',
+    kind: SettingKind.choice,
+    defaultValue: 'auto',
+    options: [('auto', 'Как в телефоне'), ('ru', 'Русский'), ('en', 'English')],
+  ),
+  SettingDef(
+    key: 'units',
+    title: 'Единицы измерения',
+    section: 'Язык и единицы',
+    kind: SettingKind.choice,
+    defaultValue: 'metric',
+    options: [('metric', 'Километры и метры'), ('imperial', 'Мили и футы')],
+  ),
+  SettingDef(
     key: 'auto_mode',
     title: 'Автозапись 24/7',
     subtitle: 'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. '
@@ -89,16 +108,6 @@ const List<SettingDef> settingDefs = [
     unit: 'мин',
   ),
   SettingDef(
-    key: 'offroute',
-    title: 'Чувствительность «вы сошли с маршрута»',
-    subtitle: 'Строгая — предупреждение при отклонении от 25 м, свободная — от 70 м',
-    section: 'Навигация',
-    kind: SettingKind.choice,
-    defaultValue: 'normal',
-    proOnly: true,
-    options: [('strict', 'Строгая'), ('normal', 'Обычная'), ('free', 'Свободная')],
-  ),
-  SettingDef(
     key: 'max_accuracy_m',
     title: 'Порог точности GPS',
     subtitle: 'Точки с худшей точностью не записываются',
@@ -128,7 +137,7 @@ const List<SettingDef> settingDefs = [
   SettingDef(
     key: 'autopause',
     title: 'Автопауза',
-    subtitle: 'На стоянке GPS опрашивается реже, чтобы экономить батарею',
+    subtitle: 'На стоянке GPS опрашивается реже (раз в 5 с), чтобы экономить батарею',
     section: 'Запись',
     kind: SettingKind.toggle,
     defaultValue: true,
@@ -138,7 +147,7 @@ const List<SettingDef> settingDefs = [
     key: 'heal_enabled',
     title: 'Склеивать короткие разрывы',
     subtitle: 'По умолчанию для просмотра и экспорта GPX',
-    section: 'Склейка',
+    section: 'Маршрут и данные',
     kind: SettingKind.toggle,
     defaultValue: true,
     proOnly: true,
@@ -147,7 +156,7 @@ const List<SettingDef> settingDefs = [
     key: 'trim_start_m',
     title: 'Обрезать начало маршрута',
     subtitle: 'Убирает первые метры при экспорте (например, чтобы не показывать дом). Маршрут не меняется и не удлиняется.',
-    section: 'Приватность',
+    section: 'Маршрут и данные',
     kind: SettingKind.number,
     defaultValue: 0,
     proOnly: true,
@@ -160,7 +169,7 @@ const List<SettingDef> settingDefs = [
     key: 'trim_end_m',
     title: 'Обрезать конец маршрута',
     subtitle: 'Убирает последние метры при экспорте',
-    section: 'Приватность',
+    section: 'Маршрут и данные',
     kind: SettingKind.number,
     defaultValue: 0,
     proOnly: true,
@@ -173,7 +182,7 @@ const List<SettingDef> settingDefs = [
     key: 'heal_bridge_max_m',
     title: 'Предел склейки пешком',
     subtitle: 'Авто — 150 м. Более длинные разрывы не склеиваются. Для велосипеда и авто пределы подбираются сами',
-    section: 'Склейка',
+    section: 'Маршрут и данные',
     kind: SettingKind.number,
     defaultValue: 0,
     proOnly: true,
@@ -182,6 +191,16 @@ const List<SettingDef> settingDefs = [
     step: 25,
     unit: 'м',
     zeroMeansAuto: true,
+  ),
+  SettingDef(
+    key: 'offroute',
+    title: 'Чувствительность «вы сошли с маршрута»',
+    subtitle: 'Строгая — предупреждение при отклонении от 25 м, свободная — от 70 м',
+    section: 'Навигация',
+    kind: SettingKind.choice,
+    defaultValue: 'normal',
+    proOnly: true,
+    options: [('strict', 'Строгая'), ('normal', 'Обычная'), ('free', 'Свободная')],
   ),
 ];
 
@@ -210,6 +229,7 @@ class AppSettings extends ChangeNotifier {
       // defaults are used
     }
     _syncTheme();
+    _syncLocale();
   }
 
   Future<void> _save() async {
@@ -218,6 +238,17 @@ class AppSettings extends ChangeNotifier {
     } catch (_) {
       // value still applies for this run
     }
+  }
+
+  /// Language and units follow the settings; "auto" takes the language of the phone.
+  void _syncLocale() {
+    final lang = getString('language');
+    L10n.set(switch (lang) {
+      'ru' => AppLang.ru,
+      'en' => AppLang.en,
+      _ => L10n.fromSystem(PlatformDispatcher.instance.locale.languageCode),
+    });
+    Units.system = getString('units') == 'imperial' ? UnitSystem.imperial : UnitSystem.metric;
   }
 
   void _syncTheme() {
@@ -244,6 +275,7 @@ class AppSettings extends ChangeNotifier {
   Future<void> set(String key, Object value) async {
     _values[key] = value;
     if (key == 'theme') _syncTheme();
+    if (key == 'language' || key == 'units') _syncLocale();
     notifyListeners();
     await _save();
   }

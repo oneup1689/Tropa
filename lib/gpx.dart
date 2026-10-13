@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'altitude.dart';
 import 'db.dart';
+import 'elevation.dart';
 import 'heal.dart';
 import 'modes.dart';
 import 'settings.dart';
@@ -30,7 +30,7 @@ Future<File> writeGpx(
   final all = await TrackDb.instance.points(sessionId);
   final pts = trimEnds(all, trimStartM, trimEndM);
   // Sea-level altitude (barometer anchored to geoid-corrected GPS) instead of raw ellipsoidal heights.
-  final alts = fusedAltitude(pts);
+  final alts = await sessionAltitude(sessionId, pts);
   final mode = TravelModeInfo.parse(await TrackDb.instance.sessionMode(sessionId));
   final result = analyzeGaps(pts, settings: AppSettings.instance.healFor(mode));
   final b = StringBuffer()

@@ -2,31 +2,38 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
-import 'package:file_picker/file_picker.dart';
-import 'package:flutter/services.dart';
-
 import 'backup.dart';
+import 'brand.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'geoid.dart';
 import 'gpx.dart';
+import 'l10n.dart';
 import 'map_page.dart';
 import 'maps_page.dart';
 import 'modes.dart';
+import 'multi_poster_page.dart';
 import 'notes.dart';
 import 'planner_page.dart';
+import 'poster_page.dart';
 import 'recorder.dart';
 import 'route_view.dart';
 import 'routes_page.dart';
 import 'settings.dart';
 import 'settings_page.dart';
-import 'share_dialog.dart';
+import 'stats.dart';
+import 'theme.dart';
+import 'units.dart';
+import 'widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,7 +43,7 @@ Future<void> main() async {
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
   await _logDevice();
   await Recorder.instance.init();
-  runApp(const TropaApp());
+  runApp(TropaApp());
 }
 
 Future<void> _logDevice() async {
@@ -62,19 +69,40 @@ class TropaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: AppSettings.instance.themeNotifier,
-      builder: (context, mode, _) => MaterialApp(
-        title: 'Tropa',
-        debugShowCheckedModeBanner: false,
-        themeMode: mode,
-        theme: ThemeData(colorSchemeSeed: const Color(0xFF2E7D32), useMaterial3: true),
-        darkTheme: ThemeData(
-            colorSchemeSeed: const Color(0xFF2E7D32), brightness: Brightness.dark, useMaterial3: true),
-        home: const HomePage(),
+    return ValueListenableBuilder<int>(
+      valueListenable: L10n.revision,
+      builder: (context, _, _) => ValueListenableBuilder<ThemeMode>(
+        valueListenable: AppSettings.instance.themeNotifier,
+        builder: (context, mode, _) => MaterialApp(
+          // A new key rebuilds every screen when the language changes.
+          key: ValueKey(L10n.current),
+          title: 'Tropa',
+          debugShowCheckedModeBanner: false,
+          themeMode: mode,
+          theme: buildTheme(Brightness.light),
+          darkTheme: buildTheme(Brightness.dark),
+          locale: Locale(L10n.code),
+          supportedLocales: [Locale('ru'), Locale('en')],
+          localizationsDelegates: [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: HomePage(),
+        ),
       ),
     );
   }
+}
+
+/// What the list of walks shows about one walk, computed once from its points.
+class _Summary {
+  final int pointCount;
+  final double distanceM;
+  final int totalSeconds;
+  final List<TrackPoint> thumb;
+
+  _Summary(this.pointCount, this.distanceM, this.totalSeconds, this.thumb);
 }
 
 class HomePage extends StatefulWidget {
@@ -87,6 +115,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final rec = Recorder.instance;
   List<SessionInfo> sessions = [];
+  final Map<int, Future<_Summary>> _summaries = {};
+  final Map<int, int> _summaryCount = {};
   Timer? _ticker;
 
   @override
@@ -94,7 +124,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     rec.addListener(_onChange);
     var tick = 0;
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+    _ticker = Timer.periodic(Duration(seconds: 1), (_) {
       if (!rec.recording) return;
       _onChange();
       // Keep the list (point counts, the new walk) fresh while a recording is running.
@@ -123,13 +153,30 @@ class _HomePageState extends State<HomePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  /// Summary of a walk, recomputed only when its number of points changed.
+  Future<_Summary> _summary(SessionInfo s) {
+    if (_summaryCount[s.id] != s.pointCount) {
+      _summaryCount[s.id] = s.pointCount;
+      _summaries[s.id] = _computeSummary(s);
+    }
+    return _summaries[s.id]!;
+  }
+
+  Future<_Summary> _computeSummary(SessionInfo s) async {
+    final pts = await TrackDb.instance.points(s.id);
+    final st = computeStats(pts, movingSpeedMs: profileOf(TravelModeInfo.parse(s.mode)).movingSpeedMs);
+    final step = (pts.length / 160).ceil().clamp(1, 1000);
+    final thumb = [for (var i = 0; i < pts.length; i += step) pts[i], if (pts.isNotEmpty) pts.last];
+    return _Summary(pts.length, st.distanceMeters, st.totalSeconds, thumb);
+  }
+
   /// Step-by-step permissions: location -> notifications -> "always" -> battery.
   Future<bool> _ensurePermissions() async {
     final log = DebugLog.instance;
     final loc = await Permission.locationWhenInUse.request();
     log.log('PERM', 'locationWhenInUse=$loc');
     if (!loc.isGranted) {
-      _snack('Нужен доступ к геолокации. Разрешите его в настройках приложения.');
+      _snack(t('Нужен доступ к геолокации. Разрешите его в настройках приложения.'));
       if (loc.isPermanentlyDenied) await openAppSettings();
       return false;
     }
@@ -143,11 +190,10 @@ class _HomePageState extends State<HomePage> {
       await showDialog<void>(
         context: context,
         builder: (c) => AlertDialog(
-          title: const Text('Запись при выключенном экране'),
-          content: const Text(
-              'На следующем экране выберите «Разрешить всегда» (на iPhone — «Всегда»). '
-              'Без этого запись может оборваться, когда экран погаснет.'),
-          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Понятно'))],
+          title: Text(t('Запись при выключенном экране')),
+          content: Text(t('На следующем экране выберите «Разрешить всегда» (на iPhone — «Всегда»). '
+              'Без этого запись может оборваться, когда экран погаснет.')),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(t('Понятно')))],
         ),
       );
       always = await Permission.locationAlways.request();
@@ -157,13 +203,12 @@ class _HomePageState extends State<HomePage> {
         final open = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: const Text('Включите «Разрешить всегда»'),
-            content: const Text(
-                'Откроются настройки приложения: Разрешения → Местоположение → «Разрешить всегда» '
-                '(и «Точное местоположение»). Затем вернитесь в Tropa.'),
+            title: Text(t('Включите «Разрешить всегда»')),
+            content: Text(t('Откроются настройки приложения: Разрешения → Местоположение → «Разрешить всегда» '
+                '(и «Точное местоположение»). Затем вернитесь в Tropa.')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Позже')),
-              TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Открыть настройки')),
+              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Позже'))),
+              TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Открыть настройки'))),
             ],
           ),
         );
@@ -191,7 +236,7 @@ class _HomePageState extends State<HomePage> {
     }
     if (!await _ensurePermissions()) return;
     final ok = await rec.start();
-    if (!ok) _snack('Не удалось начать запись. Включите GPS в настройках телефона.');
+    if (!ok) _snack(t('Не удалось начать запись. Включите GPS в настройках телефона.'));
     await _reload();
   }
 
@@ -210,45 +255,47 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setS) => AlertDialog(
-          title: const Text('Что включить в GPX'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            CheckboxListTile(
-              value: heal,
-              onChanged: (v) => setS(() => heal = v ?? heal),
-              title: const Text('Склеить короткие разрывы'),
-              subtitle: const Text('Только короткие участки, где движение было правдоподобным'),
-            ),
-            CheckboxListTile(
-              value: withTime,
-              onChanged: (v) => setS(() => withTime = v ?? withTime),
-              title: const Text('Время'),
-            ),
-            CheckboxListTile(
-              value: withEle,
-              onChanged: (v) => setS(() => withEle = v ?? withEle),
-              title: const Text('Высота'),
-            ),
-            if (AppSettings.instance.pro) ...[
-              const Divider(),
-              Text('Обрезать начало: ${trimStart.round()} м'),
-              Slider(
-                value: trimStart,
-                max: 500,
-                divisions: 20,
-                onChanged: (v) => setS(() => trimStart = v),
+          title: Text(t('Что включить в маршрут (GPX)')),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              CheckboxListTile(
+                value: heal,
+                onChanged: (v) => setS(() => heal = v ?? heal),
+                title: Text(t('Склеить короткие разрывы')),
+                subtitle: Text(t('Только короткие участки, где движение было правдоподобным')),
               ),
-              Text('Обрезать конец: ${trimEnd.round()} м'),
-              Slider(
-                value: trimEnd,
-                max: 500,
-                divisions: 20,
-                onChanged: (v) => setS(() => trimEnd = v),
+              CheckboxListTile(
+                value: withTime,
+                onChanged: (v) => setS(() => withTime = v ?? withTime),
+                title: Text(t('Время')),
               ),
-            ],
-          ]),
+              CheckboxListTile(
+                value: withEle,
+                onChanged: (v) => setS(() => withEle = v ?? withEle),
+                title: Text(t('Высота')),
+              ),
+              if (AppSettings.instance.pro) ...[
+                Divider(),
+                Text(t('Обрезать начало: {n}', {'n': Units.shortDist(trimStart)})),
+                Slider(
+                  value: trimStart,
+                  max: 500,
+                  divisions: 20,
+                  onChanged: (v) => setS(() => trimStart = v),
+                ),
+                Text(t('Обрезать конец: {n}', {'n': Units.shortDist(trimEnd)})),
+                Slider(
+                  value: trimEnd,
+                  max: 500,
+                  divisions: 20,
+                  onChanged: (v) => setS(() => trimEnd = v),
+                ),
+              ],
+            ]),
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Отмена')),
-            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Поделиться')),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Поделиться'))),
           ],
         ),
       ),
@@ -262,38 +309,38 @@ class _HomePageState extends State<HomePage> {
       trimStartM: trimStart,
       trimEndM: trimEnd,
     );
-    await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: 'Tropa — маршрут'));
+    await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: t('Tropa — маршрут')));
   }
 
   Future<void> _newNote() async {
     final saved = await showNoteSheet(context);
-    if (saved) _snack('Заметка сохранена');
+    if (saved) _snack(t('Заметка сохранена'));
   }
 
   /// Opens the imported routes; if the user picks "go along this route", the recording starts with
   /// off-route warnings.
   Future<void> _openRoutes() async {
-    final routeId = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => const RoutesPage()));
+    final routeId = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => RoutesPage()));
     if (routeId == null || !mounted) return;
     if (rec.recording) {
-      _snack('Сначала остановите текущую запись');
+      _snack(t('Сначала остановите текущую запись'));
       return;
     }
     if (!await _ensurePermissions()) return;
     final ok = await rec.start(routeId: routeId);
-    _snack(ok ? 'Запись идёт по выбранному маршруту' : 'Не удалось начать запись');
+    _snack(ok ? t('Запись идёт по выбранному маршруту') : t('Не удалось начать запись'));
     await _reload();
   }
 
   Future<void> _backup() async {
-    _snack('Готовлю резервную копию…');
+    _snack(t('Готовлю резервную копию…'));
     try {
       final r = await exportBackup();
-      await SharePlus.instance.share(ShareParams(files: [XFile(r.file.path)], text: 'Tropa — резервная копия'));
-      _snack('Копия: прогулок ${r.sessions}, точек ${r.points}');
+      await SharePlus.instance.share(ShareParams(files: [XFile(r.file.path)], text: t('Tropa — резервная копия')));
+      _snack(t('Копия: прогулок {n}, точек {p}', {'n': r.sessions, 'p': r.points}));
     } catch (e) {
       DebugLog.instance.log('BACKUP', 'export failed: $e');
-      _snack('Не удалось создать копию: $e');
+      _snack(t('Не удалось создать копию: {e}', {'e': e}));
     }
   }
 
@@ -303,63 +350,51 @@ class _HomePageState extends State<HomePage> {
     if (path == null) return;
     try {
       final r = await importBackup(File(path));
-      _snack('Восстановлено прогулок: ${r.sessions}, пропущено повторов: ${r.skipped}, заметок: ${r.notes}, маршрутов: ${r.routes}');
+      _snack(t('Восстановлено прогулок: {n}, пропущено повторов: {s}, заметок: {m}, маршрутов: {r}',
+          {'n': r.sessions, 's': r.skipped, 'm': r.notes, 'r': r.routes}));
       await _reload();
     } catch (e) {
       DebugLog.instance.log('BACKUP', 'import failed: $e');
-      _snack('Не удалось восстановить: $e');
+      _snack(t('Не удалось восстановить: {e}', {'e': e}));
     }
-  }
-
-  /// Picture without a map background (works even without a downloaded map).
-  Future<void> _imageWithoutMap(SessionInfo s) async {
-    final options = await askShareOptions(context);
-    if (options == null || !mounted) return;
-    final pts = await TrackDb.instance.points(s.id);
-    await shareRouteImage(
-      title: _date(s.startMs),
-      pts: pts,
-      mode: TravelModeInfo.parse(s.mode),
-      options: options,
-      fileName: 'tropa_${s.id}',
-    );
   }
 
   /// Quick notes for the test walk: what the user did with the phone and when.
   Future<void> _addMark() async {
-    const presets = [
-      'Режим самолёта ВКЛ',
-      'Режим самолёта ВЫКЛ',
-      'Экономия батареи ВКЛ',
-      'Экономия батареи ВЫКЛ',
-      'GPS ВКЛ',
-      'GPS ВЫКЛ',
-      'Экран погашен',
-      'Экран включён',
-      'Телефон в кармане',
+    final presets = [
+      t('Режим самолёта ВКЛ'),
+      t('Режим самолёта ВЫКЛ'),
+      t('Экономия батареи ВКЛ'),
+      t('Экономия батареи ВЫКЛ'),
+      t('GPS ВКЛ'),
+      t('GPS ВЫКЛ'),
+      t('Экран погашен'),
+      t('Экран включён'),
+      t('Телефон в кармане'),
     ];
     final ctl = TextEditingController();
     final note = await showDialog<String>(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text('Метка в лог'),
+        title: Text(t('Метка в лог')),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Wrap(spacing: 6, children: [
-              for (final p in presets) ActionChip(label: Text(p), onPressed: () => Navigator.pop(c, p)),
+              for (final p in presets) ActionChip(label: Text(t(p)), onPressed: () => Navigator.pop(c, p)),
             ]),
-            TextField(controller: ctl, decoration: const InputDecoration(hintText: 'Своя заметка')),
+            SizedBox(height: 8),
+            TextField(controller: ctl, decoration: InputDecoration(hintText: t('Своя заметка'))),
           ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Отмена')),
-          TextButton(onPressed: () => Navigator.pop(c, ctl.text.trim()), child: const Text('Записать')),
+          TextButton(onPressed: () => Navigator.pop(c), child: Text(t('Отмена'))),
+          TextButton(onPressed: () => Navigator.pop(c, ctl.text.trim()), child: Text(t('Записать'))),
         ],
       ),
     );
     if (note != null && note.isNotEmpty) {
       rec.mark(note);
-      _snack('Метка записана');
+      _snack(t('Метка записана'));
     }
   }
 
@@ -374,263 +409,534 @@ class _HomePageState extends State<HomePage> {
 
   static String _fmt(Duration d) => '${_two(d.inHours)}:${_two(d.inMinutes % 60)}:${_two(d.inSeconds % 60)}';
 
+  /// "12 окт · 07:23" (the year is added for older walks).
   static String _date(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    final year = d.year == DateTime.now().year ? '' : ' ${d.year}';
+    return '${d.day} ${monthShort(d.month)}$year · ${_two(d.hour)}:${_two(d.minute)}';
+  }
+
+  /// Plain "12.10.2026 07:23" for titles of other screens.
+  static String _dateFull(int ms) {
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
     return '${_two(d.day)}.${_two(d.month)}.${d.year} ${_two(d.hour)}:${_two(d.minute)}';
   }
 
-  String _status(String s) => switch (s) {
-        'active' => 'идёт запись',
-        'interrupted' => 'прервана',
-        _ => 'завершена',
-      };
-
-  Widget _stat(String label, String value) => Column(children: [
-        Text(value, style: Theme.of(context).textTheme.titleMedium),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
-      ]);
+  static String _duration(int seconds) {
+    final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60;
+    return h > 0 ? '$h:${_two(m)}' : '${m == 0 ? 1 : m} ${t('мин')}';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final elapsed = rec.startedAt == null ? Duration.zero : DateTime.now().difference(rec.startedAt!);
     return PopScope(
       // While recording, "Back" only minimises the app: closing the activity can stop the recorder.
       canPop: !rec.recording,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && Platform.isAndroid) {
           DebugLog.instance.log('LIFECYCLE', 'Back pressed while recording -> moveTaskToBack');
-          const MethodChannel('tropa/system').invokeMethod('moveToBack');
+          MethodChannel('tropa/system').invokeMethod('moveToBack');
         }
       },
-      child: _scaffold(context, elapsed),
+      child: _scaffold(context),
     );
   }
 
-  Widget _scaffold(BuildContext context, Duration elapsed) {
+  Widget _scaffold(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tropa'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (v) async {
-              final nav = Navigator.of(context);
-              if (v == 'settings') {
-                await nav.push(MaterialPageRoute(builder: (_) => const SettingsPage()));
-              }
-              if (v == 'maps') {
-                await nav.push(MaterialPageRoute(builder: (_) => const MapsPage()));
-              }
-              if (v == 'openmap') {
-                await nav.push(MaterialPageRoute(builder: (_) => const MapPage()));
-              }
-              if (v == 'routes') await _openRoutes();
-              if (v == 'planner') {
-                await nav.push(MaterialPageRoute(builder: (_) => const PlannerPage()));
-              }
-              if (v == 'backup') await _backup();
-              if (v == 'restore') await _restore();
-              if (v == 'mark') await _addMark();
-              if (v == 'log') await _shareLog();
-              if (v == 'clear') {
-                await DebugLog.instance.clear();
-                _snack('Лог очищен');
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'settings', child: Text('Настройки')),
-              PopupMenuItem(value: 'openmap', child: Text('Открыть карту')),
-              PopupMenuItem(value: 'maps', child: Text('Карты (загрузка)')),
-              PopupMenuItem(value: 'routes', child: Text('Маршруты (импорт GPX)')),
-              PopupMenuItem(value: 'planner', child: Text('Планировщик')),
-              PopupMenuItem(value: 'backup', child: Text('Резервная копия')),
-              PopupMenuItem(value: 'restore', child: Text('Восстановить из копии')),
-              PopupMenuItem(value: 'mark', child: Text('Добавить метку в лог')),
-              PopupMenuItem(value: 'log', child: Text('Отправить лог отладки')),
-              PopupMenuItem(value: 'clear', child: Text('Очистить лог')),
-            ],
-          ),
-        ],
+        titleSpacing: 16,
+        title: Row(children: [
+          TropaLogo(size: 34),
+          SizedBox(width: 10),
+          Text('Tropa', style: TextStyle(fontFamily: headingFont, fontSize: 22, fontVariations: [FontVariation('wght', 700)])),
+        ]),
+        actions: [_menu(context)],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(16, 4, 16, 32),
         children: [
-          if (rec.recording && !rec.gpsEnabled)
-            Card(
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: ListTile(
-                leading: const Icon(Icons.location_off),
-                title: const Text('GPS выключен — маршрут не пишется'),
-                subtitle: const Text('Включите геолокацию, запись продолжится сама.'),
-                trailing: FilledButton(
-                  onPressed: Geolocator.openLocationSettings,
-                  child: const Text('Включить'),
-                ),
+          ..._banners(context),
+          _recordCard(context),
+          SizedBox(height: 22),
+          Row(children: [
+            Text(t('Прогулки'), style: Theme.of(context).textTheme.titleLarge),
+            SizedBox(width: 8),
+            if (sessions.isNotEmpty)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(20)),
+                child: Text('${sessions.length}', style: Theme.of(context).textTheme.labelMedium?.copyWith(color: cs.onPrimaryContainer)),
               ),
-            ),
-          if (rec.watching && !rec.recording)
-            Card(
-              color: rec.motionSensor == 'none' ? Theme.of(context).colorScheme.errorContainer : null,
-              child: ListTile(
-                leading: Icon(rec.motionSensor == 'none' ? Icons.warning_amber : Icons.hearing),
-                title: const Text('Автозапись 24/7 включена'),
-                subtitle: Text(rec.motionSensor == 'none'
-                    ? 'На этом телефоне нет датчика шагов или движения: автозапись не заметит, что вы пошли. '
-                        'Запускайте запись кнопкой.'
-                    : 'Жду движения: GPS выключен. Запись начнётся сама.'),
+          ]),
+          SizedBox(height: 6),
+          if (sessions.isEmpty) _emptyState(context),
+          for (final s in sessions) _sessionCard(context, s),
+        ],
+      ),
+    );
+  }
+
+  Widget _menu(BuildContext context) {
+    final pro = AppSettings.instance.pro;
+    PopupMenuItem<String> item(String value, IconData icon, String label) => PopupMenuItem(
+          value: value,
+          child: Row(children: [Icon(icon, size: 20), SizedBox(width: 12), Flexible(child: Text(label))]),
+        );
+    return PopupMenuButton<String>(
+      onSelected: (v) async {
+        final nav = Navigator.of(context);
+        switch (v) {
+          case 'settings':
+            await nav.push(MaterialPageRoute(builder: (_) => SettingsPage()));
+          case 'maps':
+            await nav.push(MaterialPageRoute(builder: (_) => MapsPage()));
+          case 'openmap':
+            await nav.push(MaterialPageRoute(builder: (_) => const MapPage()));
+          case 'routes':
+            await _openRoutes();
+          case 'multi':
+            await nav.push(MaterialPageRoute(builder: (_) => const MultiPosterPage()));
+          case 'planner':
+            await nav.push(MaterialPageRoute(builder: (_) => const PlannerPage()));
+          case 'backup':
+            await _backup();
+          case 'restore':
+            await _restore();
+          case 'mark':
+            await _addMark();
+          case 'log':
+            await _shareLog();
+          case 'clear':
+            await DebugLog.instance.clear();
+            _snack(t('Лог очищен'));
+        }
+      },
+      itemBuilder: (_) => [
+        item('settings', Icons.tune, t('Настройки')),
+        item('openmap', Icons.map_outlined, t('Открыть карту')),
+        item('maps', Icons.download_for_offline_outlined, t('Карты')),
+        item('routes', Icons.alt_route, t('Маршруты (импорт GPX)')),
+        item('planner', Icons.event_available_outlined, t('Планировщик')),
+        if (pro) item('multi', Icons.collections_outlined, t('Постер из нескольких прогулок')),
+        const PopupMenuDivider(),
+        item('backup', Icons.backup_outlined, t('Резервная копия')),
+        item('restore', Icons.restore, t('Восстановить из копии')),
+        const PopupMenuDivider(),
+        if (pro) item('mark', Icons.bookmark_add_outlined, t('Добавить метку в лог')),
+        item('log', Icons.bug_report_outlined, t('Отправить лог отладки')),
+        if (pro) item('clear', Icons.delete_sweep_outlined, t('Очистить лог')),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------------------ banners
+
+  List<Widget> _banners(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    Widget banner(IconData icon, String title, String text, {Color? color, Widget? action}) => Card(
+          color: color ?? cs.surfaceContainerHigh,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            child: Row(children: [
+              Icon(icon, size: 28),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 2),
+                  Text(text, style: Theme.of(context).textTheme.bodySmall),
+                ]),
               ),
-            ),
-          if (rec.recording && rec.offRouteMeters >= 0)
-            Card(
-              color: rec.offRouteMeters > AppSettings.instance.offRouteMeters
-                  ? Theme.of(context).colorScheme.errorContainer
-                  : Theme.of(context).colorScheme.secondaryContainer,
-              child: ListTile(
-                leading: const Icon(Icons.navigation),
-                title: Text(rec.offRouteMeters > AppSettings.instance.offRouteMeters
-                    ? 'Вы в ${rec.offRouteMeters.round()} м от маршрута'
-                    : 'Вы на маршруте'),
-                subtitle: Text('Расстояние до линии: ${rec.offRouteMeters.round()} м'),
-              ),
-            ),
-          if (rec.interrupted != null && !rec.recording)
-            Card(
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: ListTile(
-                title: const Text('Прошлая запись была прервана'),
-                subtitle: Text('Сохранено точек: ${rec.interrupted!.pointCount}. Можно продолжить.'),
-                trailing: TextButton(
-                  onPressed: () => _resume(rec.interrupted!),
-                  child: const Text('Продолжить'),
-                ),
-              ),
-            ),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text(rec.recording ? 'Идёт запись' : 'Запись остановлена',
-                      style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  // Travel mode: chosen before the start, locked while recording.
-                  Wrap(spacing: 8, alignment: WrapAlignment.center, children: [
-                    for (final m in TravelMode.values)
-                      ChoiceChip(
-                        label: Text(m.label),
-                        selected: (rec.recording ? rec.activeMode : AppSettings.instance.travelMode) == m,
-                        onSelected: rec.recording ? null : (_) async {
-                          await AppSettings.instance.setTravelMode(m);
-                          if (mounted) setState(() {});
-                        },
-                      ),
-                  ]),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _stat('Дистанция', '${(rec.distanceM / 1000).toStringAsFixed(2)} км'),
-                      _stat('Время', rec.recording ? _fmt(elapsed) : '—'),
-                      _stat(rec.autoPaused ? 'Пауза' : 'В движении',
-                          rec.recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—'),
-                      _stat(
-                        rec.recording && rec.gpsEnabled && rec.sinceFixSec >= 20 ? 'Сигнал' : 'Точность',
-                        !rec.recording
-                            ? '—'
-                            : (rec.gpsEnabled && rec.sinceFixSec >= 20
-                                ? 'нет ${rec.sinceFixSec} с'
-                                : '${rec.lastAccuracy.toStringAsFixed(0)} м'),
-                      ),
-                    ],
+              if (action != null) ...[const SizedBox(width: 8), action],
+            ]),
+          ),
+        );
+    final out = <Widget>[];
+    if (rec.recording && !rec.gpsEnabled) {
+      out.add(banner(
+        Icons.location_off,
+        t('GPS выключен — маршрут не пишется'),
+        t('Включите геолокацию, запись продолжится сама.'),
+        color: cs.errorContainer,
+        action: FilledButton(onPressed: Geolocator.openLocationSettings, child: Text(t('Включить'))),
+      ));
+    }
+    if (rec.watching && !rec.recording) {
+      final noSensor = rec.motionSensor == 'none';
+      out.add(banner(
+        noSensor ? Icons.warning_amber : Icons.hearing,
+        t('Автозапись 24/7 включена'),
+        noSensor
+            ? t('На этом телефоне нет датчика шагов или движения: автозапись не заметит, что вы пошли. Запускайте запись кнопкой.')
+            : t('Жду движения: GPS выключен. Запись начнётся сама.'),
+        color: noSensor ? cs.errorContainer : cs.primaryContainer,
+      ));
+    }
+    if (rec.recording && rec.offRouteMeters >= 0) {
+      final off = rec.offRouteMeters > AppSettings.instance.offRouteMeters;
+      out.add(banner(
+        Icons.navigation,
+        off ? t('Вы в {d} от маршрута', {'d': Units.shortDist(rec.offRouteMeters)}) : t('Вы на маршруте'),
+        t('Расстояние до линии: {d}', {'d': Units.shortDist(rec.offRouteMeters)}),
+        color: off ? cs.errorContainer : cs.secondaryContainer,
+      ));
+    }
+    if (rec.interrupted != null && !rec.recording) {
+      out.add(banner(
+        Icons.history_toggle_off,
+        t('Прошлая запись была прервана'),
+        t('Сохранено точек: {n}. Можно продолжить.', {'n': rec.interrupted!.pointCount}),
+        color: cs.errorContainer,
+        action: TextButton(onPressed: () => _resume(rec.interrupted!), child: Text(t('Продолжить'))),
+      ));
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------------ record card
+
+  Widget _recordCard(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final elapsed = rec.startedAt == null ? Duration.zero : DateTime.now().difference(rec.startedAt!);
+    final recording = rec.recording;
+    final gradient = dark ? const [Color(0xFF14463A), Color(0xFF0B2A25)] : const [Color(0xFF1F6B4A), Color(0xFF0B3D2E)];
+    final label = recording ? (rec.manualPause ? t('ПАУЗА') : t('ЗАПИСЬ')) : t('ГОТОВ К ПРОГУЛКЕ');
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(30),
+      child: Container(
+        decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: gradient)),
+        child: Stack(children: [
+          const Positioned.fill(child: CustomPaint(painter: ContourPainter(color: Color(0x1FFFFFFF)))),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                _StatusPill(recording: recording, paused: rec.manualPause, label: label),
+                const Spacer(),
+                if (recording)
+                  Text(_fmt(elapsed),
+                      style: const TextStyle(
+                          fontFamily: headingFont, fontSize: 26, color: Colors.white, fontVariations: [FontVariation('wght', 700)])),
+              ]),
+              const SizedBox(height: 16),
+              _modeChips(recording),
+              const SizedBox(height: 20),
+              Row(children: [
+                Expanded(flex: 5, child: Padding(padding: const EdgeInsets.only(right: 12), child: _stat(Units.dist(rec.distanceM), t('Дистанция')))),
+                Expanded(
+                    flex: 4,
+                    child: _stat(recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—',
+                        rec.autoPaused || rec.manualPause ? t('Пауза') : t('В движении'))),
+                Expanded(
+                  flex: 4,
+                  child: _stat(
+                    !recording
+                        ? '—'
+                        : (rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('нет {s} с', {'s': rec.sinceFixSec}) : Units.shortDist(rec.lastAccuracy)),
+                    recording && rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('Сигнал') : t('Точность'),
                   ),
-                  const SizedBox(height: 16),
-                  FilledButton.icon(
-                    onPressed: _toggle,
-                    icon: Icon(rec.recording ? Icons.stop : Icons.play_arrow),
-                    label: Text(rec.recording ? 'Остановить' : 'Начать запись'),
-                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
-                  ),
-                  if (rec.recording) ...[
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _newNote,
-                          icon: const Icon(Icons.edit_note),
-                          label: const Text('Заметка'),
+                ),
+              ]),
+              const SizedBox(height: 22),
+              _recordButton(recording),
+              if (recording) ...[
+                const SizedBox(height: 10),
+                Row(children: [
+                  if (Platform.isAndroid) ...[
+                    Expanded(
+                      child: _glassButton(
+                        rec.manualPause ? Icons.play_arrow : Icons.pause,
+                        rec.manualPause ? t('Продолжить') : t('Пауза'),
+                        rec.manualPause ? rec.resume : rec.pause,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(child: _glassButton(Icons.edit_note, t('Заметка'), _newNote)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _glassButton(
+                      Icons.map_outlined,
+                      t('Карта'),
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MapPage(sessionId: rec.sessionId, live: true, title: t('Живая карта'), mode: AppSettings.instance.travelMode),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => MapPage(
-                                sessionId: rec.sessionId,
-                                live: true,
-                                title: 'Живая карта',
-                                mode: AppSettings.instance.travelMode,
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.map),
-                          label: const Text('Живая карта'),
+                    ),
+                  ),
+                ]),
+                if (rec.manualPause)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(
+                      t('Запись продолжится сама, когда вы отойдёте больше чем на 20 м.'),
+                      style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                    ),
+                  ),
+              ],
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _stat(String value, String label) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(value,
+              style: const TextStyle(
+                  fontFamily: headingFont, fontSize: 20, color: Colors.white, fontVariations: [FontVariation('wght', 700)])),
+        ),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      ]);
+
+  Widget _modeChips(bool recording) {
+    final current = recording ? rec.activeMode : AppSettings.instance.travelMode;
+    return Wrap(spacing: 8, runSpacing: 8, children: [
+      for (final m in TravelMode.values)
+        GestureDetector(
+          onTap: recording
+              ? null
+              : () async {
+                  await AppSettings.instance.setTravelMode(m);
+                  if (mounted) setState(() {});
+                },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: current == m ? Colors.white : const Color(0x26FFFFFF),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(modeIcon(m), size: 17, color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white)),
+              const SizedBox(width: 6),
+              Text(
+                t(m.label),
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontVariations: const [FontVariation('wght', 600)],
+                  color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white),
+                ),
+              ),
+            ]),
+          ),
+        ),
+    ]);
+  }
+
+  Widget _recordButton(bool recording) {
+    return SizedBox(
+      width: double.infinity,
+      height: 58,
+      child: FilledButton.icon(
+        onPressed: _toggle,
+        icon: Icon(recording ? Icons.stop_rounded : Icons.play_arrow_rounded, size: 30),
+        label: Text(recording ? t('Остановить') : t('Начать запись'), style: const TextStyle(fontSize: 16.5)),
+        style: FilledButton.styleFrom(
+          backgroundColor: recording ? const Color(0xFFE53935) : TropaColors.orange,
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(58),
+        ),
+      ),
+    );
+  }
+
+  Widget _glassButton(IconData icon, String label, VoidCallback onTap) => OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 19),
+        label: FittedBox(fit: BoxFit.scaleDown, child: Text(label)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          backgroundColor: const Color(0x1AFFFFFF),
+          side: const BorderSide(color: Color(0x40FFFFFF)),
+          minimumSize: const Size(0, 46),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+        ),
+      );
+
+  // ------------------------------------------------------------------ walks
+
+  Widget _emptyState(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
+      child: Column(children: [
+        const TropaLogo(size: 64),
+        const SizedBox(height: 14),
+        Text(t('Пока пусто'), style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(t('Нажмите «Начать запись» и пройдитесь: маршрут появится здесь.'),
+            textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+      ]),
+    );
+  }
+
+  IconData _statusIcon(String s) => switch (s) {
+        'active' => Icons.fiber_manual_record,
+        'interrupted' => Icons.warning_amber_rounded,
+        _ => Icons.check_circle_outline,
+      };
+
+  Widget _sessionCard(BuildContext context, SessionInfo s) {
+    final cs = Theme.of(context).colorScheme;
+    final mode = TravelModeInfo.parse(s.mode);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => RouteViewPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: FutureBuilder<_Summary>(
+            future: _summary(s),
+            builder: (context, snap) {
+              final sum = snap.data;
+              return Row(children: [
+                RouteThumb(
+                  points: sum?.thumb ?? const [],
+                  background: dark ? const Color(0xFF123B30) : const Color(0xFF1F6B4A),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(_date(s.startMs), style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 5),
+                    Row(children: [
+                      Icon(modeIcon(mode), size: 16, color: cs.primary),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          sum == null ? t(mode.label) : '${t(mode.label)} · ${Units.dist(sum.distanceM, digits: 1)} · ${_duration(sum.totalSeconds)}',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ]),
-                  ],
-                ],
-              ),
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      Icon(_statusIcon(s.status),
+                          size: 13,
+                          color: s.status == 'active' ? Colors.redAccent : (s.status == 'interrupted' ? cs.error : cs.primary)),
+                      const SizedBox(width: 4),
+                      Text(
+                        s.status == 'active'
+                            ? t('идёт запись')
+                            : (s.status == 'interrupted' ? t('прервана') : t('точек: {n}', {'n': s.pointCount})),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                    ]),
+                  ]),
+                ),
+                _sessionMenu(context, s, mode),
+              ]);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sessionMenu(BuildContext context, SessionInfo s, TravelMode mode) {
+    PopupMenuItem<String> item(String value, IconData icon, String label) => PopupMenuItem(
+          value: value,
+          child: Row(children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)]),
+        );
+    return PopupMenuButton<String>(
+      onSelected: (v) async {
+        if (v == 'map') {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => MapPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
+          );
+        } else if (v == 'image') {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => PosterPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
+          );
+        } else if (v == 'gpx') {
+          await _exportGpx(s.id);
+        } else if (v == 'delete' && s.status != 'active') {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (c) => AlertDialog(
+              title: Text(t('Удалить прогулку?')),
+              content: Text(t('Точки, заметки и участки этой прогулки будут удалены. Фото и видео в галерее останутся.')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
+                TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Удалить'))),
+              ],
+            ),
+          );
+          if (ok == true) {
+            await TrackDb.instance.deleteSession(s.id);
+            await _reload();
+          }
+        }
+      },
+      itemBuilder: (_) => [
+        item('map', Icons.map_outlined, t('На карте')),
+        item('image', Icons.image_outlined, t('Постер')),
+        item('gpx', Icons.ios_share, t('Маршрут (GPX)')),
+        item('delete', Icons.delete_outline, t('Удалить')),
+      ],
+    );
+  }
+}
+
+/// "ЗАПИСЬ" / "ПАУЗА" / "ГОТОВ К ПРОГУЛКЕ": a pill with a pulsing dot while recording.
+class _StatusPill extends StatefulWidget {
+  final bool recording;
+  final bool paused;
+  final String label;
+
+  const _StatusPill({required this.recording, required this.paused, required this.label});
+
+  @override
+  State<_StatusPill> createState() => _StatusPillState();
+}
+
+class _StatusPillState extends State<_StatusPill> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.paused ? Colors.amber : (widget.recording ? const Color(0xFFFF5252) : const Color(0xFF69F0AE));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(color: const Color(0x26FFFFFF), borderRadius: BorderRadius.circular(20)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        AnimatedBuilder(
+          animation: _pulse,
+          builder: (_, _) => Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color.withValues(alpha: widget.recording && !widget.paused ? 0.45 + 0.55 * _pulse.value : 1),
             ),
           ),
-          const SizedBox(height: 16),
-          Text('Прогулки', style: Theme.of(context).textTheme.titleMedium),
-          if (sessions.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('Пока пусто')),
-          for (final s in sessions)
-            Card(
-              child: ListTile(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => RouteViewPage(
-                            sessionId: s.id,
-                            title: _date(s.startMs),
-                            mode: TravelModeInfo.parse(s.mode),
-                          )),
-                ),
-                title: Text(_date(s.startMs)),
-                subtitle: Text(
-                    '${TravelModeInfo.parse(s.mode).label} · точек: ${s.pointCount} · ${_status(s.status)}'),
-                trailing: PopupMenuButton<String>(
-                  onSelected: (v) async {
-                    final mode = TravelModeInfo.parse(s.mode);
-                    if (v == 'map') {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => MapPage(sessionId: s.id, title: _date(s.startMs), mode: mode),
-                        ),
-                      );
-                    } else if (v == 'image') {
-                      await _imageWithoutMap(s);
-                    } else if (v == 'gpx') {
-                      await _exportGpx(s.id);
-                    } else if (v == 'delete' && s.status != 'active') {
-                      await TrackDb.instance.deleteSession(s.id);
-                      await _reload();
-                    }
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'map', child: Text('На карте')),
-                    PopupMenuItem(value: 'image', child: Text('Картинка без карты')),
-                    PopupMenuItem(value: 'gpx', child: Text('Файл GPX')),
-                    PopupMenuItem(value: 'delete', child: Text('Удалить')),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 8),
+        Text(widget.label,
+            style: const TextStyle(color: Colors.white, fontSize: 12.5, letterSpacing: 0.8, fontVariations: [FontVariation('wght', 700)])),
+      ]),
     );
   }
 }

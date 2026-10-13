@@ -105,3 +105,11 @@ ElevationStats elevationStats(List<double> alt, {double threshold = 3}) {
   }
   return ElevationStats(gain, loss, lo, hi);
 }
+
+/// Climb and descent of a walk. With a barometer small changes are real (3 m). Without one the GPS height
+/// wanders by 10 m or more even when standing, so only changes of 12 m and more count: otherwise a flat
+/// walk collects hundreds of metres of "climb" from noise.
+ElevationStats elevationOf(List<TrackPoint> pts, List<double> alt) {
+  final hasBarometer = pts.any((p) => p.pressure > 0);
+  return elevationStats(alt, threshold: hasBarometer ? 3 : 12);
+}

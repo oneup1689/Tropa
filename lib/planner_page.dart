@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'maps.dart';
 import 'modes.dart';
 import 'settings.dart';
+import 'l10n.dart';
 
 /// Trip planner: a reminder (and optionally an automatic start of the recording) at a chosen time,
 /// plus a readiness checklist so nothing is forgotten before leaving.
@@ -67,8 +68,8 @@ class _PlannerPageState extends State<PlannerPage> {
     if (raw is List) {
       for (final e in raw) {
         if (e is Map<String, dynamic>) {
-          final t = _PlannedTrip.fromJson(e);
-          if (t.atMs > now) list.add(t);
+          final trip = _PlannedTrip.fromJson(e);
+          if (trip.atMs > now) list.add(trip);
         }
       }
     }
@@ -76,41 +77,41 @@ class _PlannerPageState extends State<PlannerPage> {
     setState(() => trips = list);
   }
 
-  Future<void> _store() => AppSettings.instance.set('trips', [for (final t in trips) t.toJson()]);
+  Future<void> _store() => AppSettings.instance.set('trips', [for (final trip in trips) trip.toJson()]);
 
   Future<void> _runChecks() async {
     final list = <_Check>[];
     final regions = await MapStore.regions();
-    list.add(_Check('Загружена офлайн-карта', regions.isNotEmpty,
-        hint: regions.isEmpty ? 'Добавьте карту в разделе «Карты»' : '${regions.length} шт.'));
+    list.add(_Check(t('Загружена офлайн-карта'), regions.isNotEmpty,
+        hint: regions.isEmpty ? t('Добавьте карту в разделе «Карты»') : t('{p0} шт.', {'p0': regions.length})));
 
     try {
       final level = await Battery().batteryLevel;
-      list.add(_Check('Заряд батареи не ниже 50 %', level >= 50, hint: 'Сейчас $level %'));
+      list.add(_Check(t('Заряд батареи не ниже 50 %'), level >= 50, hint: t('Сейчас {p0} %', {'p0': level})));
     } catch (_) {}
 
     final gps = await Geolocator.isLocationServiceEnabled();
-    list.add(_Check('GPS включён', gps, fix: gps ? null : Geolocator.openLocationSettings));
+    list.add(_Check(t('GPS включён'), gps, fix: gps ? null : Geolocator.openLocationSettings));
 
     final always = await Permission.locationAlways.isGranted;
-    list.add(_Check('Геолокация «Всегда»', always,
-        hint: always ? null : 'Нужна для записи с погашенным экраном',
+    list.add(_Check(t('Геолокация «Всегда»'), always,
+        hint: always ? null : t('Нужна для записи с погашенным экраном'),
         fix: always ? null : () async => openAppSettings()));
 
     final notif = await Permission.notification.isGranted;
-    list.add(_Check('Уведомления разрешены', notif, fix: notif ? null : () async => Permission.notification.request()));
+    list.add(_Check(t('Уведомления разрешены'), notif, fix: notif ? null : () async => Permission.notification.request()));
 
     if (Platform.isAndroid) {
       final batt = await Permission.ignoreBatteryOptimizations.isGranted;
-      list.add(_Check('Без ограничений батареи', batt,
-          hint: batt ? null : 'Иначе система может остановить запись',
+      list.add(_Check(t('Без ограничений батареи'), batt,
+          hint: batt ? null : t('Иначе система может остановить запись'),
           fix: batt ? null : () async => Permission.ignoreBatteryOptimizations.request()));
     }
     if (mounted) setState(() => checks = list);
   }
 
   Future<void> _add() async {
-    final title = TextEditingController(text: 'Прогулка');
+    final title = TextEditingController(text: t('Прогулка'));
     var mode = AppSettings.instance.travelMode;
     var auto = true;
     var when = DateTime.now().add(const Duration(hours: 1));
@@ -119,10 +120,10 @@ class _PlannerPageState extends State<PlannerPage> {
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setS) => AlertDialog(
-          title: const Text('Новая прогулка'),
+          title: Text(t('Новая прогулка')),
           content: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              TextField(controller: title, decoration: const InputDecoration(labelText: 'Название')),
+              TextField(controller: title, decoration: InputDecoration(labelText: t('Название'))),
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 icon: const Icon(Icons.schedule),
@@ -135,9 +136,9 @@ class _PlannerPageState extends State<PlannerPage> {
                     lastDate: DateTime.now().add(const Duration(days: 365)),
                   );
                   if (d == null || !c.mounted) return;
-                  final t = await showTimePicker(context: c, initialTime: TimeOfDay.fromDateTime(when));
-                  if (t == null) return;
-                  setS(() => when = DateTime(d.year, d.month, d.day, t.hour, t.minute));
+                  final picked = await showTimePicker(context: c, initialTime: TimeOfDay.fromDateTime(when));
+                  if (picked == null) return;
+                  setS(() => when = DateTime(d.year, d.month, d.day, picked.hour, picked.minute));
                 },
               ),
               const SizedBox(height: 8),
@@ -147,23 +148,23 @@ class _PlannerPageState extends State<PlannerPage> {
               ]),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Начать запись автоматически'),
-                subtitle: const Text('Если система не разрешит, придёт напоминание'),
+                title: Text(t('Начать запись автоматически')),
+                subtitle: Text(t('Если система не разрешит, придёт напоминание')),
                 value: auto,
                 onChanged: (v) => setS(() => auto = v),
               ),
             ]),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Отмена')),
-            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Запланировать')),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Запланировать'))),
           ],
         ),
       ),
     );
     if (ok != true) return;
     if (when.isBefore(DateTime.now())) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Время уже прошло')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Время уже прошло'))));
       return;
     }
     final id = (DateTime.now().millisecondsSinceEpoch ~/ 1000) % 1000000000;
@@ -175,9 +176,9 @@ class _PlannerPageState extends State<PlannerPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _cancel(_PlannedTrip t) async {
-    await _sys.invokeMethod('cancelTrip', {'id': t.id});
-    trips.removeWhere((x) => x.id == t.id);
+  Future<void> _cancel(_PlannedTrip trip) async {
+    await _sys.invokeMethod('cancelTrip', {'id': trip.id});
+    trips.removeWhere((x) => x.id == trip.id);
     await _store();
     if (mounted) setState(() {});
   }
@@ -190,14 +191,14 @@ class _PlannerPageState extends State<PlannerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Планировщик')),
+      appBar: AppBar(title: Text(t('Планировщик'))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _add,
         icon: const Icon(Icons.add_alarm),
-        label: const Text('Запланировать'),
+        label: Text(t('Запланировать')),
       ),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        Text('Готовность к прогулке', style: Theme.of(context).textTheme.titleMedium),
+        Text(t('Готовность к прогулке'), style: Theme.of(context).textTheme.titleMedium),
         for (final c in checks)
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -212,21 +213,21 @@ class _PlannerPageState extends State<PlannerPage> {
                       await c.fix!();
                       await _runChecks();
                     },
-                    child: const Text('Исправить'),
+                    child: Text(t('Исправить')),
                   ),
           ),
         const Divider(),
-        Text('Запланированные прогулки', style: Theme.of(context).textTheme.titleMedium),
-        if (trips.isEmpty) const Padding(padding: EdgeInsets.all(12), child: Text('Пока ничего не запланировано')),
-        for (final t in trips)
+        Text(t('Запланированные прогулки'), style: Theme.of(context).textTheme.titleMedium),
+        if (trips.isEmpty) Padding(padding: const EdgeInsets.all(12), child: Text(t('Пока ничего не запланировано'))),
+        for (final trip in trips)
           Card(
             child: ListTile(
               leading: const Icon(Icons.alarm),
-              title: Text(t.title.isEmpty ? 'Прогулка' : t.title),
+              title: Text(trip.title.isEmpty ? t('Прогулка') : trip.title),
               subtitle: Text(
-                  '${_fmt(DateTime.fromMillisecondsSinceEpoch(t.atMs))} · ${TravelModeInfo.parse(t.mode).label}'
-                  '${t.autoStart ? ' · автостарт' : ''}'),
-              trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => _cancel(t)),
+                  '${_fmt(DateTime.fromMillisecondsSinceEpoch(trip.atMs))} · ${t(TravelModeInfo.parse(trip.mode).label)}'
+                  '${trip.autoStart ? t(' · автостарт') : ''}'),
+              trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => _cancel(trip)),
             ),
           ),
         const SizedBox(height: 72),
