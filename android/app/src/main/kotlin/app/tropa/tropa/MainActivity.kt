@@ -27,6 +27,7 @@ class MainActivity : FlutterActivity() {
             .putExtra(TrackingService.EXTRA_IDLE_MIN, (call.argument<Number>("idleMinutes"))?.toInt() ?: 5)
             .putExtra(TrackingService.EXTRA_OFFROUTE_M, (call.argument<Number>("offRouteM"))?.toFloat() ?: 40f)
             .putExtra(TrackingService.EXTRA_ROUTE, (call.argument<Number>("routeId"))?.toLong() ?: 0L)
+            .putExtra("lang", call.argument<String>("lang") ?: "ru")
 
     private fun launch(intent: Intent) {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
@@ -50,6 +51,19 @@ class MainActivity : FlutterActivity() {
                             )
                         )
                     }
+                    "setLanguage" -> {
+                        Tr.setLanguage(this, call.argument<String>("code") ?: "ru")
+                        result.success(null)
+                    }
+                    "keepScreenOn" -> {
+                        // A long map download must not be interrupted by the screen going off.
+                        val on = call.argument<Boolean>("on") ?: false
+                        runOnUiThread {
+                            if (on) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                        result.success(null)
+                    }
                     "moveToBack" -> {
                         moveTaskToBack(true)
                         result.success(null)
@@ -60,6 +74,14 @@ class MainActivity : FlutterActivity() {
                     }
                     "stopTracking" -> {
                         startService(Intent(this, TrackingService::class.java).setAction(TrackingService.ACTION_STOP))
+                        result.success(null)
+                    }
+                    "pauseTracking" -> {
+                        startService(Intent(this, TrackingService::class.java).setAction(TrackingService.ACTION_PAUSE))
+                        result.success(null)
+                    }
+                    "resumeTracking" -> {
+                        startService(Intent(this, TrackingService::class.java).setAction(TrackingService.ACTION_RESUME))
                         result.success(null)
                     }
                     "watch" -> {

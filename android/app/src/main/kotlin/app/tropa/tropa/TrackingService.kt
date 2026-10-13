@@ -53,6 +53,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         const val ACTION_STOP = "app.tropa.tropa.STOP"
         const val ACTION_WATCH = "app.tropa.tropa.WATCH"
         const val ACTION_UNWATCH = "app.tropa.tropa.UNWATCH"
+        const val ACTION_PAUSE = "app.tropa.tropa.PAUSE"
+        const val ACTION_RESUME = "app.tropa.tropa.RESUME"
         const val EXTRA_SESSION = "session"
         const val EXTRA_MAX_ACC = "maxAccuracy"
         const val EXTRA_INTERVAL = "intervalMs"
@@ -78,7 +80,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         private const val STATIONARY_STORE_MS = 15_000L
         private const val GAP_MS = 30_000L
         private const val PAUSE_AFTER_MS = 60_000L // standing this long -> low-power GPS rate
-        private const val LOW_POWER_INTERVAL_MS = 10_000L
+        private const val LOW_POWER_INTERVAL_MS = 5_000L // 10 s let the GNSS chip duty-cycle and accuracy fell to 100+ m
+        private const val RESUME_DISTANCE_M = 20f // moved this far during a manual pause -> recording resumes
         private const val STEPS_TO_WAKE = 20 // steps within STEP_WINDOW_MS start a GPS probe
         private const val STEP_WINDOW_MS = 30_000L
         private const val PROBE_CONFIRM_M = 30f // displacement that confirms real movement
@@ -96,6 +99,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         @Volatile var lastFixAt = 0L
         @Volatile var movingMs = 0L
         @Volatile var lowPower = false
+        @Volatile var manualPause = false
         @Volatile var lastLat = 0.0
         @Volatile var lastLon = 0.0
         @Volatile var offRouteM = -1.0 // distance from the loaded route, -1 when no route / unknown
@@ -112,6 +116,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             "startMs" to startMs,
             "movingMs" to movingMs,
             "paused" to lowPower,
+            "manualPause" to manualPause,
             "lat" to lastLat,
             "lon" to lastLon,
             "offRoute" to offRouteM,
@@ -167,10 +172,10 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             if (Build.VERSION.SDK_INT < 26) return
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Запись маршрута", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL_ID, Tr.t(context, "Запись маршрута"), NotificationManager.IMPORTANCE_LOW)
             )
             nm.createNotificationChannel(
-                NotificationChannel(ALERT_CHANNEL_ID, "Тревоги и напоминания", NotificationManager.IMPORTANCE_HIGH).apply {
+                NotificationChannel(ALERT_CHANNEL_ID, Tr.t(context, "Тревоги и напоминания"), NotificationManager.IMPORTANCE_HIGH).apply {
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
                 }
@@ -207,6 +212,9 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private var signalLost = false
     private var beatCount = 0
     private var lastPressure = 0f
+    private var pendingFix: Location? = null
+    private var pausePos: Location? = null
+    private var gpsOffWhileWatching = false
 
     // 24/7 watching
     private val stepTimes = ArrayDeque<Long>()
@@ -228,7 +236,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private val gpsOffCheck = Runnable {
         // Debounce: alert only if GPS is still off 10 s after it was switched off.
         if (lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == false) {
-            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+            raiseAlert(Tr.t(this, "GPS выключен — маршрут не пишется"), Tr.t(this, "Включите геолокацию, запись продолжится сама."))
         }
     }
 
@@ -267,6 +275,14 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 if (state == State.RECORD) stopRecording() else if (!autoEnabled()) shutdown()
                 return if (autoEnabled()) START_STICKY else START_NOT_STICKY
             }
+            ACTION_PAUSE -> {
+                if (state == State.RECORD && !manualPause) enterManualPause()
+                return START_STICKY
+            }
+            ACTION_RESUME -> {
+                if (state == State.RECORD && manualPause) leaveManualPause("button")
+                return START_STICKY
+            }
             ACTION_UNWATCH -> {
                 prefs.edit().putBoolean(KEY_AUTO, false).apply()
                 if (state == State.WATCH || state == State.PROBE || state == State.IDLE) {
@@ -277,7 +293,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             }
         }
 
-        startInForeground("Ожидание…")
+        startInForeground(Tr.t(this, "Ожидание…"))
         loadParams(intent, prefs)
 
         when {
@@ -309,6 +325,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
 
     /** Settings come from the UI on a normal start; after a system restart reuse the saved ones. */
     private fun loadParams(intent: Intent?, prefs: android.content.SharedPreferences) {
+        intent?.getStringExtra("lang")?.let { Tr.setLanguage(this, it) }
         if (intent != null && intent.hasExtra(EXTRA_MAX_ACC)) {
             maxAccuracy = intent.getFloatExtra(EXTRA_MAX_ACC, 50f)
             intervalMs = intent.getLongExtra(EXTRA_INTERVAL, 2000L)
@@ -342,6 +359,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                     "walk" -> { intervalMs = 2000L; jumpSpeed = 10.0; movingSpeed = 0.4 }
                     "bike" -> { intervalMs = 2000L; jumpSpeed = 25.0; movingSpeed = 0.8 }
                     "car" -> { intervalMs = 1000L; jumpSpeed = 70.0; movingSpeed = 2.0 }
+                    "water" -> { intervalMs = 2000L; jumpSpeed = 15.0; movingSpeed = 0.3 }
                     else -> { intervalMs = 2000L; jumpSpeed = 70.0; movingSpeed = 0.5 }
                 }
             }
@@ -362,7 +380,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         running = false
         stepTimes.clear()
         registerStepSensor()
-        updateNotification("Ожидание движения")
+        updateNotification(Tr.t(this, "Ожидание движения"))
         ensureHeartbeat()
         log(this, "AUTO", "watching for movement (steps >= $STEPS_TO_WAKE in ${STEP_WINDOW_MS / 1000}s wakes GPS)")
     }
@@ -430,13 +448,27 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
 
     private fun startProbe(reason: String) {
         if (state != State.WATCH) return
+        // Steps and significant motion work without GPS, but a probe cannot: tell the user, who can switch it on.
+        val manager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        if (!manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            cooldownUntil = System.currentTimeMillis() + PROBE_COOLDOWN_MS
+            stepTimes.clear()
+            if (!gpsOffWhileWatching) {
+                gpsOffWhileWatching = true
+                log(this, "AUTO", "movement seen ($reason) but GPS is off: asking the user to switch it on")
+                postAlert(ALERT_ID, Tr.t(this, "Вы двигаетесь, но GPS выключен"), Tr.t(this, "Включите геолокацию — запись маршрута начнётся сама."))
+            }
+            return
+        }
+        gpsOffWhileWatching = false
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID)
         state = State.PROBE
         probeStartWall = System.currentTimeMillis()
         probeOrigin = null
         probeBuffer.clear()
         acquireWakeLock(PROBE_TIMEOUT_MS + 30_000)
         log(this, "AUTO", "probe started ($reason): checking GPS for real movement")
-        updateNotification("Проверяю, началось ли движение")
+        updateNotification(Tr.t(this, "Проверяю, началось ли движение"))
         requestUpdates(2000L)
     }
 
@@ -488,7 +520,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             database.execSQL("UPDATE sessions SET status='active', end_ms=NULL WHERE id=?", arrayOf<Any>(resumeId))
             loadSessionStats(database, resumeId)
             log(this, "SVC", "resumed session=$resumeId points=$points restartedBySystem=$restarted")
-            if (restarted) raiseAlert("Запись перезапущена системой", "В маршруте мог появиться пропуск.")
+            if (restarted) raiseAlert(Tr.t(this, "Запись перезапущена системой"), Tr.t(this, "В маршруте мог появиться пропуск."))
         } else {
             val cv = ContentValues().apply {
                 put("start_ms", System.currentTimeMillis())
@@ -514,6 +546,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         autoSession = auto
         activeMode = modeCode
         lowPower = false
+        manualPause = false
+        pausePos = null
         lastMovingWall = System.currentTimeMillis()
         lastFixWall = lastMovingWall
         lastFixAt = lastFixWall
@@ -531,7 +565,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         registerPressureSensor()
         requestUpdates(intervalMs)
         ensureHeartbeat()
-        updateNotification("Идёт запись маршрута")
+        updateNotification(Tr.t(this, "Идёт запись маршрута"))
     }
 
     private fun stopRecording() {
@@ -554,6 +588,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         cancelAlerts()
         running = false
         lowPower = false
+        manualPause = false
         sessionId = 0
         autoSession = false
         lastStored = null
@@ -649,7 +684,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return b.setContentTitle("Tropa")
             .setContentText(text)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_tropa)
             .setOngoing(true)
             .setContentIntent(open)
             .build()
@@ -736,6 +771,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         clearAlert()
         val acc = if (loc.hasAccuracy()) loc.accuracy else 99f
         lastAcc = acc
+        if (manualPause && !resumeIfMoved(loc, acc)) return
         val prev = lastStored
         var skip: String? = null
         var dist = 0f
@@ -746,8 +782,19 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         } else if (prev != null) {
             dtSec = (loc.time - prev.time) / 1000.0
             dist = prev.distanceTo(loc)
-            if (dtSec > 20 && acc > 20f) {
-                skip = "poor first fix after gap (acc=${"%.1f".format(acc)})"
+            if (dtSec > 20 && acc > 20f && !confirmsPending(loc)) {
+                // Not trusted alone, but remembered: a second fix that agrees with it ends the gap
+                // (otherwise every following fix would be "first after a gap" and the hole kept growing).
+                pendingFix = Location(loc)
+                // Standing in low-power mode, then clearly displaced: the walk has started, even though
+                // this fix is too poor to store. Return to the fast GPS rate to get good fixes quickly.
+                if (lowPower && dist > maxOf(30f, acc)) {
+                    lowPower = false
+                    lastMovingWall = now
+                    log(this, "AUTOPAUSE", "displacement ${dist.toInt()} m on a poor fix, back to normal GPS rate")
+                    requestUpdates(intervalMs)
+                }
+                skip ="poor first fix after gap (acc=${"%.1f".format(acc)})"
             } else if (dtSec > 0 && dist / dtSec > jumpSpeed && acc > 8f) {
                 skip = "speed jump ${"%.1f".format(dist / dtSec * 3.6)} km/h"
             }
@@ -803,6 +850,55 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         )
 
         if (routeLat != null) evaluateRoute(lat, lon, acc, movingNow, now)
+    }
+
+    // ------------------------------------------------------------------ manual pause
+
+    /** Pause button: nothing is stored, but GPS keeps a slow watch so that walking on resumes the track. */
+    private fun enterManualPause() {
+        manualPause = true
+        pausePos = lastStored?.let { Location(it) }
+        lowPower = true
+        pendingFix = null
+        requestUpdates(intervalMs)
+        updateNotification(Tr.t(this, "Пауза: пойдёте дальше — запись продолжится сама"))
+        log(this, "PAUSE", "manual pause at ${pausePos?.let { "%.6f,%.6f".format(it.latitude, it.longitude) } ?: "unknown position"}")
+    }
+
+    private fun leaveManualPause(reason: String) {
+        manualPause = false
+        pausePos = null
+        lowPower = false
+        pendingFix = null
+        lastMovingWall = System.currentTimeMillis()
+        requestUpdates(intervalMs)
+        updateNotification(Tr.t(this, "Идёт запись маршрута"))
+        log(this, "PAUSE", "resumed ($reason)")
+    }
+
+    /** While paused: returns true (and ends the pause) once a reliable fix is [RESUME_DISTANCE_M] away. */
+    private fun resumeIfMoved(loc: Location, acc: Float): Boolean {
+        if (acc > 30f) return false
+        val origin = pausePos
+        if (origin == null) {
+            pausePos = Location(loc)
+            return false
+        }
+        val d = origin.distanceTo(loc)
+        if (d < maxOf(RESUME_DISTANCE_M, acc)) return false
+        leaveManualPause("moved ${d.toInt()} m")
+        return true
+    }
+
+    /** True when [loc] lies close to the previously rejected poor fix, i.e. the position has stabilised. */
+    private fun confirmsPending(loc: Location): Boolean {
+        val p = pendingFix ?: return false
+        pendingFix = null
+        val dt = (loc.time - p.time) / 1000.0
+        if (dt <= 0 || dt > 30) return false
+        val speed = p.distanceTo(loc) / dt
+        // Plausible on foot, by bike or by scooter at 10 s sampling; a bigger jump needs a good fix to be trusted.
+        return speed <= minOf(jumpSpeed, 15.0)
     }
 
     private fun insertPoint(lat: Double, lon: Double, acc: Float, loc: Location, speed: Double): Boolean {
@@ -898,7 +994,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             if (!offActive && offCount >= 3 && now - offStartWall >= 15_000) {
                 offActive = true
                 log(this, "NAV", "OFF ROUTE: ${d.toInt()} m from the route")
-                postAlert(ROUTE_ALERT_ID, "Вы сошли с маршрута", "Вы в ${d.toInt()} м от линии маршрута.")
+                postAlert(ROUTE_ALERT_ID, Tr.t(this, "Вы сошли с маршрута"), Tr.offRoute(this, d.toInt()))
             }
         } else if (d < 25.0) {
             onCount++
@@ -923,6 +1019,14 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             State.WATCH -> {
                 beatCount++
                 if (beatCount % 30 == 0) log(this, "AUTO", "still watching (battery ${battery()}%)")
+                // The user switched GPS on after our warning: check for movement right away.
+                if (gpsOffWhileWatching) {
+                    val m = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                    if (m.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                        cooldownUntil = 0L
+                        startProbe("GPS switched on after movement")
+                    }
+                }
                 return
             }
             State.IDLE -> return
@@ -935,7 +1039,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         // Loud alert only when the user can fix it (GPS switched off). "GPS on but no satellites"
         // (forest, tunnel, cold start) is only logged: alerting would be pointless.
         if (!gpsOn) {
-            raiseAlert("GPS выключен — маршрут не пишется", "Включите геолокацию, запись продолжится сама.")
+            raiseAlert(Tr.t(this, "GPS выключен — маршрут не пишется"), Tr.t(this, "Включите геолокацию, запись продолжится сама."))
         } else if (sinceMs > NO_SIGNAL_MS) {
             if (!signalLost) {
                 signalLost = true
@@ -952,7 +1056,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 this, "BEAT",
                 "native points=$points dist=${distanceM.toInt()}m sinceLastFix=${sinceMs / 1000}s gps=$gpsOn battery=${battery()}%"
             )
-            updateNotification("Точек: $points · ${"%.2f".format(distanceM / 1000)} км")
+            updateNotification(Tr.points(this, points, "%.2f".format(distanceM / 1000)))
         }
         if (gpsOn && sinceMs > WATCHDOG_MS) {
             log(this, "WATCHDOG", "no fixes for >${WATCHDOG_MS / 1000}s, re-requesting updates")
@@ -961,7 +1065,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         }
 
         // 24/7: a session that started by itself ends after a quiet period.
-        if (autoSession && now - lastMovingWall > idleMs) {
+        if (autoSession && !manualPause && now - lastMovingWall > idleMs) {
             log(this, "AUTO", "no movement for ${idleMs / 60000} min, closing the automatic session")
             stopRecording()
             return
@@ -982,7 +1086,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, ALERT_CHANNEL_ID) else Notification.Builder(this)
         val n = b.setContentTitle("⚠️ $title")
             .setContentText(text)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_tropa)
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
@@ -1003,7 +1107,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(ALERT_ID)
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
-        b.setContentTitle("Запись возобновлена").setSmallIcon(R.mipmap.ic_launcher).setAutoCancel(true)
+        b.setContentTitle(Tr.t(this, "Запись возобновлена")).setSmallIcon(R.drawable.ic_stat_tropa).setAutoCancel(true)
         if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(15_000)
         nm.notify(ALERT_ID, b.build())
     }

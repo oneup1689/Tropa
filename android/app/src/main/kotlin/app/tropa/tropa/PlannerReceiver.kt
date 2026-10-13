@@ -94,7 +94,7 @@ class PlannerReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
         val id = intent.getIntExtra("id", 0)
-        val title = intent.getStringExtra("title")?.takeIf { it.isNotBlank() } ?: "Запланированная прогулка"
+        val title = intent.getStringExtra("title")?.takeIf { it.isNotBlank() } ?: Tr.t(context, "Запланированная прогулка")
         val auto = intent.getBooleanExtra("autoStart", false)
         val mode = intent.getStringExtra("mode") ?: "mixed"
         TrackingService.log(context, "PLAN", "alarm #$id fired, autoStart=$auto")
@@ -118,8 +118,8 @@ class PlannerReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(context, TrackingService.ALERT_CHANNEL_ID) else Notification.Builder(context)
-        val text = if (started) "Запись маршрута запущена автоматически." else "Не забудьте включить запись трека."
-        val n = b.setContentTitle("🥾 $title").setContentText(text).setSmallIcon(R.mipmap.ic_launcher)
+        val text = if (started) Tr.t(context, "Запись маршрута запущена автоматически.") else Tr.t(context, "Не забудьте включить запись трека.")
+        val n = b.setContentTitle("🥾 $title").setContentText(text).setSmallIcon(R.drawable.ic_stat_tropa)
             .setContentIntent(open).setAutoCancel(true).build()
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(2000 + id, n)
 
