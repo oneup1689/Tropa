@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'device_net.dart';
 import 'l10n.dart';
 import 'map_catalog_page.dart';
 import 'map_downloads.dart';
@@ -25,6 +26,7 @@ class _MapsPageState extends State<MapsPage> {
   final dl = MapDownloader.instance;
   List<MapRegion> regions = [];
   String folder = '';
+  int? freeBytes; // free space on the phone (Android), shown next to the size of the maps
   bool busy = false;
   Map<String, Object?>? pending;
   ({String build, DateTime? date})? newest;
@@ -53,8 +55,10 @@ class _MapsPageState extends State<MapsPage> {
     final list = await MapStore.regions();
     final dir = await MapStore.regionsDir();
     final saved = await dl.pending();
+    final free = await freeStorageBytes();
     if (mounted) {
       setState(() {
+        freeBytes = free;
         regions = list;
         folder = dir.path;
         pending = saved;
@@ -88,10 +92,12 @@ class _MapsPageState extends State<MapsPage> {
   }
 
   Future<void> _delete(MapRegion r) async {
+    final size = r.sizeBytes;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: Text(t('Удалить карту «{n}»?', {'n': r.name})),
+        content: Text(t('Освободится {a}. Карту можно скачать снова, когда будет интернет.', {'a': _mb(size)})),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
           TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Удалить'))),
@@ -101,6 +107,9 @@ class _MapsPageState extends State<MapsPage> {
     if (ok == true) {
       await MapStore.deleteRegion(r);
       await _reload();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Карта удалена, освобождено {a}', {'a': _mb(size)}))));
+      }
     }
   }
 
@@ -142,6 +151,17 @@ class _MapsPageState extends State<MapsPage> {
         const SizedBox(height: 22),
         Text(t('Установленные карты'), style: text.titleLarge),
         const SizedBox(height: 6),
+        if (regions.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              [
+                t('Карты занимают {a}', {'a': _mb(regions.fold<int>(0, (s, r) => s + r.sizeBytes))}),
+                if (freeBytes != null) t('свободно {a}', {'a': _mb(freeBytes!)}),
+              ].join(' · '),
+              style: text.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ),
         if (MapStore.lastListError != null) Text(MapStore.lastListError!, style: TextStyle(color: cs.error)),
         if (regions.isEmpty && MapStore.lastListError == null)
           Card(

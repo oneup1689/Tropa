@@ -28,6 +28,10 @@ class MainActivity : FlutterActivity() {
             .putExtra(TrackingService.EXTRA_OFFROUTE_M, (call.argument<Number>("offRouteM"))?.toFloat() ?: 40f)
             .putExtra(TrackingService.EXTRA_ROUTE, (call.argument<Number>("routeId"))?.toLong() ?: 0L)
             .putExtra("lang", call.argument<String>("lang") ?: "ru")
+            .putExtra(TrackingService.EXTRA_GOAL_M, (call.argument<Number>("goalM"))?.toDouble() ?: 0.0)
+            .putExtra(TrackingService.EXTRA_GOAL_ROUND, call.argument<Boolean>("goalRound") ?: false)
+            .putExtra(TrackingService.EXTRA_GOAL_LABEL, call.argument<String>("goalLabel") ?: "")
+            .putExtra(TrackingService.EXTRA_GOAL_HALF_LABEL, call.argument<String>("goalHalfLabel") ?: "")
 
     private fun launch(intent: Intent) {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
@@ -92,6 +96,10 @@ class MainActivity : FlutterActivity() {
                     }
                     "pauseTracking" -> {
                         startService(Intent(this, TrackingService::class.java).setAction(TrackingService.ACTION_PAUSE))
+                        result.success(null)
+                    }
+                    "setGoal" -> {
+                        startService(serviceIntent(call, TrackingService.ACTION_GOAL))
                         result.success(null)
                     }
                     "resumeTracking" -> {

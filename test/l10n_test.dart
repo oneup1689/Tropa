@@ -41,6 +41,14 @@ void main() {
     expect([w(1), w(2)], ['region', 'regions']);
   });
 
+  test('goal labels are round figures', () {
+    expect(Units.distTrim(5000), '5 км');
+    expect(Units.distTrim(2500), '2.5 км');
+    L10n.set(AppLang.en);
+    Units.system = UnitSystem.imperial;
+    expect(Units.distTrim(3 * 1609.344), '3 mi');
+  });
+
   test('precipitation in millimetres or inches', () {
     expect(Units.precip(1.5), '1.5 мм');
     L10n.set(AppLang.en);

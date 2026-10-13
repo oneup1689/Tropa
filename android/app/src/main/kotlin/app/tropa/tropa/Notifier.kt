@@ -15,6 +15,7 @@ object Notifier {
     const val NOTIFICATION_ID = 1001
     const val ALERT_ID = 1002
     const val ROUTE_ALERT_ID = 1003
+    const val GOAL_ID = 1004
 
     private fun manager(c: Context) = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -52,8 +53,8 @@ object Notifier {
 
     fun updateOngoing(c: Context, text: String) = manager(c).notify(NOTIFICATION_ID, ongoing(c, text))
 
-    fun postAlert(c: Context, id: Int, title: String, text: String) {
-        val n = builder(c, ALERT_CHANNEL_ID).setContentTitle("⚠️ $title")
+    fun postAlert(c: Context, id: Int, title: String, text: String, icon: String = "⚠️") {
+        val n = builder(c, ALERT_CHANNEL_ID).setContentTitle("$icon $title")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_tropa)
             .setContentIntent(openApp(c, 1))

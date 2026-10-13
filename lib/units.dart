@@ -28,6 +28,12 @@ class Units {
   /// "12.34 км" / "7.67 mi".
   static String dist(double meters, {int digits = 2}) => '${toLong(meters).toStringAsFixed(digits)} $kmUnit';
 
+  /// A round figure for goals: "5 км", "2.5 км", "3 mi".
+  static String distTrim(double meters) {
+    final v = toLong(meters);
+    return '${v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1)} $kmUnit';
+  }
+
   /// Short distances: "150 м" / "492 ft".
   static String shortDist(double meters) => '${(imperial ? meters / _foot : meters).round()} $shortDistUnit';
 

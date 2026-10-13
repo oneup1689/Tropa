@@ -137,8 +137,12 @@ const Map<String, String> enStrings = {
   'Tropa записывает маршрут по GPS и без карты. Скачать её можно позже: пройденный путь ляжет на неё, им можно поделиться (GPX) или собрать постер.':
       'Tropa records your route by GPS even without a map. You can download one later: the walked path will be drawn on it, and you can share it (GPX) or make a poster.',
   'Не хватает места': 'Not enough space',
-  'Карте «{n}» нужно {a} (с небольшим запасом для системы), а на телефоне свободно {f}. Освободите место и попробуйте снова.':
-      'The map "{n}" needs {a} (with a small reserve for the system), but only {f} is free on the phone. Free up some space and try again.',
+  'Карте «{n}» нужно {a} (с небольшим запасом для системы), а на телефоне свободно {f}. Освободите место (например, удалите ненужные карты на экране «Карты») и попробуйте снова.':
+      'The map "{n}" needs {a} (with a small reserve for the system), but only {f} is free on the phone. Free up some space (for example, delete maps you do not need on the "Maps" screen) and try again.',
+  'Освободится {a}. Карту можно скачать снова, когда будет интернет.': 'Frees {a}. You can download the map again when you have internet.',
+  'Карта удалена, освобождено {a}': 'Map deleted, {a} freed',
+  'Карты занимают {a}': 'Maps take {a}',
+  'свободно {a}': '{a} free',
   'Wi-Fi не подключён': 'Wi-Fi is not connected',
   'Карта «{n}» весит {a}, а вы не в Wi-Fi: загрузка пойдёт по мобильному интернету. Скачать?':
       'The map "{n}" is {a} and you are not on Wi-Fi: it will download over mobile data. Download?',
@@ -380,6 +384,19 @@ const Map<String, String> enStrings = {
   'Километры и метры': 'Kilometres and metres',
   'Мили и футы': 'Miles and feet',
   'Выключено: километры и метры': 'Off: kilometres and metres',
+  'Цель': 'Goal',
+  'Цель достигнута': 'Goal reached',
+  'Идём обратно: осталось {a}': 'Heading back: {a} left',
+  'До цели {a}': '{a} to the goal',
+  'Цель на прогулку': 'Goal for this walk',
+  'Положите телефон в карман: когда цель будет выполнена, придёт уведомление. Запись не остановится.':
+      'Put the phone in your pocket: you get a notification when the goal is done. Recording does not stop.',
+  'Своё значение': 'Your own value',
+  'Туда и обратно': 'Out and back',
+  'Уведомим на половине пути: пора разворачиваться. Цель считается по общей дистанции.':
+      'We notify you at the half-way point: time to turn around. The goal counts the total distance.',
+  'Убрать цель': 'Remove goal',
+  'Готово': 'Done',
   'Температура': 'Temperature',
   'Можно оставить °C при милях (или наоборот)': 'You can keep °C with miles (or the other way round)',
   'Как расстояния': 'Same as distances',

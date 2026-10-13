@@ -29,6 +29,8 @@ object Tr {
         "Запланированная прогулка" to "Scheduled walk",
         "Запись маршрута запущена автоматически." to "Route recording was started automatically.",
         "Не забудьте включить запись трека." to "Do not forget to start recording the track.",
+        "Цель достигнута" to "Goal reached",
+        "Половина пути пройдена" to "Halfway there",
     )
 
     fun setLanguage(ctx: Context, code: String) {
@@ -43,6 +45,12 @@ object Tr {
 
     fun offRoute(ctx: Context, meters: Int): String =
         if (isEnglish(ctx)) "You are $meters m from the route line." else "Вы в $meters м от линии маршрута."
+
+    fun goalDone(ctx: Context, label: String): String =
+        if (isEnglish(ctx)) "You have covered $label. Recording continues." else "Вы прошли $label. Запись продолжается."
+
+    fun goalHalf(ctx: Context, halfLabel: String): String =
+        if (isEnglish(ctx)) "Time to turn around: $halfLabel back to reach the goal." else "Пора разворачиваться: обратно ещё $halfLabel до цели."
 
     fun points(ctx: Context, count: Int, km: String): String =
         if (isEnglish(ctx)) "Points: $count · $km km" else "Точек: $count · $km км"

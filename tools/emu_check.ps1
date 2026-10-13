@@ -25,6 +25,26 @@ function Walk($lon, $lat, $steps, $dLon, $dLat) {
     return @($lon, $lat)
 }
 function Tap($x, $y) { adb shell input tap $x $y | Out-Null }
+# Taps a control by its label (Flutter exposes it as content-desc/text): robust against layout changes.
+# Picks the smallest matching element; returns $false if none was found.
+function TapLabel($pattern) {
+    adb shell "uiautomator dump /sdcard/ui.xml" | Out-Null
+    $xml = (adb shell "cat /sdcard/ui.xml") -join ""
+    $best = $null
+    foreach ($m in [regex]::Matches($xml, '<node[^>]*?>')) {
+        $n = $m.Value
+        $d = [regex]::Match($n, '(?:content-desc|text|hint)="([^"]+)"').Groups[1].Value   # non-empty: "text" is often empty and comes first
+        if (-not $d -or $d -notmatch $pattern) { continue }
+        $b = [regex]::Match($n, 'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+        if (-not $b.Success) { continue }
+        $v = 1..4 | ForEach-Object { [int]$b.Groups[$_].Value }
+        $area = ($v[2] - $v[0]) * ($v[3] - $v[1])
+        if ($null -eq $best -or $area -lt $best.Area) { $best = @{ Area = $area; X = [int](($v[0] + $v[2]) / 2); Y = [int](($v[1] + $v[3]) / 2) } }
+    }
+    if ($null -eq $best) { return $false }
+    Tap $best.X $best.Y
+    return $true
+}
 
 # --- install and prepare
 adb install -r $Apk | Out-Null
@@ -37,7 +57,7 @@ adb shell am start -n "$pkg/.MainActivity" | Out-Null
 Start-Sleep 45
 
 # --- 1. recording through the service
-Tap 538 1012   # Start recording
+TapLabel "^Start recording" | Out-Null   # Start recording (the position changes with the layout)
 Start-Sleep 4
 $pos = Walk 105.8542 21.0285 25 0.00004 0.00002
 $log = AppLog
@@ -62,7 +82,7 @@ Start-Sleep 30
 Check "session resumed after kill" ((AppLog) -match "resumed session=\d+ points=\d+ restartedBySystem=true")
 
 # --- 4. stop from the UI
-Tap 538 1023   # Stop (no route banner)
+TapLabel "^Stop$" | Out-Null   # Stop
 Start-Sleep 4
 Check "session closed on stop" ((AppLog) -match "\[SVC\] stopped session=")
 
@@ -86,7 +106,7 @@ Start-Sleep 5
 adb emu geo fix 105.8560 21.0300 | Out-Null
 Start-Sleep 3
 $pos = Walk 105.8560 21.0300 8 0.00004 0.00002          # along the route
-$pos = Walk $pos[0] $pos[1] 12 0.00004 0.00020          # leaves it (~190 m)
+$pos = Walk $pos[0] $pos[1] 20 0.00004 0.00012          # leaves it (~250 m, longer than the 15 s the warning needs)
 Check "route loaded" ((AppLog) -match "\[NAV\] route \d+ loaded")
 Check "off-route warning" ((AppLog) -match "\[NAV\] OFF ROUTE")
 for ($i = 0; $i -lt 5; $i++) {
@@ -94,8 +114,29 @@ for ($i = 0; $i -lt 5; $i++) {
     adb emu geo fix 105.85684 21.03042 | Out-Null; Start-Sleep -Milliseconds 2200
 }
 Check "back on route" ((AppLog) -match "\[NAV\] back on route")
-Tap 538 1231   # Stop (route banner shifts the button down)
+TapLabel "^Stop$" | Out-Null   # Stop (the route banner shifts the button down)
 Start-Sleep 4
+
+# --- 5b. distance goal with out-and-back: set in the UI (the service is not exported, adb cannot start it)
+TapLabel "^Goal$" | Out-Null
+Start-Sleep 2
+TapLabel "^Your own value" | Out-Null
+adb shell input text "0.08" | Out-Null
+adb shell input keyevent 4 | Out-Null     # closes the keyboard only
+Start-Sleep 1
+TapLabel "^Out and back" | Out-Null
+TapLabel "^Done$" | Out-Null
+Start-Sleep 2
+adb emu geo fix 105.8542 21.0285 | Out-Null   # stand at the start BEFORE recording, otherwise the first step is a jump from the old place
+Start-Sleep 3
+TapLabel "^Start recording" | Out-Null
+Start-Sleep 5
+$pos = Walk 105.8542 21.0285 28 0.00004 0.00002          # about 120 m: half way at 40 m, goal at 80 m
+$log = AppLog
+Check "goal: half-way notification" ($log -match "\[GOAL\] half way at")
+Check "goal: reached notification" ($log -match "\[GOAL\] goal reached at")
+TapLabel "^Stop$" | Out-Null
+Start-Sleep 3
 
 # --- 6. nothing fatal in the log
 Check "no FATAL / exceptions in the service" (-not ((AppLog) -match "FATAL|beat failed"))

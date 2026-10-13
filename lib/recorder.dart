@@ -12,6 +12,7 @@ import 'debug_log.dart';
 import 'l10n.dart';
 import 'modes.dart';
 import 'settings.dart';
+import 'units.dart';
 
 /// Recording facade.
 ///
@@ -62,6 +63,19 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   double lastLat = 0;
   double lastLon = 0;
   double offRouteMeters = -1;
+
+  /// Distance goal of the walk (from the native service while recording; 0 = none), whether it is out-and-back,
+  /// and how far it went: 0 = not yet, 1 = half way passed, 2 = reached.
+  double goalM = 0;
+  bool goalRound = false;
+  int goalStage = 0;
+
+  /// Goal chosen before the walk starts; it goes to the service with the start command and is forgotten afterwards.
+  double pendingGoalM = 0;
+  bool pendingGoalRound = false;
+
+  double get activeGoalM => recording ? goalM : pendingGoalM;
+  bool get activeGoalRound => recording ? goalRound : pendingGoalRound;
 
   /// Set at startup when the previous run ended without "stop" and nothing is recording now.
   SessionInfo? interrupted;
@@ -145,9 +159,15 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       lastLat = (m['lat'] as num?)?.toDouble() ?? 0;
       lastLon = (m['lon'] as num?)?.toDouble() ?? 0;
       offRouteMeters = nav;
+      final gm = (m['goalM'] as num?)?.toDouble() ?? 0;
+      final gStage = (m['goalStage'] as num?)?.toInt() ?? 0;
+      final goalChanged = gm != goalM || gStage != goalStage;
+      goalM = gm;
+      goalRound = m['goalRound'] == true;
+      goalStage = gStage;
       startedAt = running && start != null && start > 0 ? DateTime.fromMillisecondsSinceEpoch(start) : null;
       if (running) interrupted = null;
-      if (changed || timeChanged || posChanged) notifyListeners();
+      if (changed || timeChanged || posChanged || goalChanged) notifyListeners();
     } catch (e) {
       _log.log('RECORDER', 'status poll failed: $e');
     }
@@ -240,6 +260,29 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
         'lang': L10n.code,
       };
 
+  Map<String, Object?> _goalArgs(double meters, bool roundTrip) => {
+        'goalM': meters,
+        'goalRound': roundTrip,
+        // Ready-made texts for the notifications written by the service, in the person's units.
+        'goalLabel': Units.distTrim(meters),
+        'goalHalfLabel': Units.distTrim(meters / 2),
+        'lang': L10n.code,
+      };
+
+  /// Sets the distance goal of this walk: while recording it goes to the service at once, before the start it
+  /// waits for the start command. 0 removes the goal. Android only (the iOS recorder has no goal yet).
+  Future<void> setGoal(double meters, {bool roundTrip = false}) async {
+    if (recording && Platform.isAndroid) {
+      _log.log('GOAL', 'UI sets goal ${meters.round()} m roundTrip=$roundTrip while recording');
+      await _sys.invokeMethod('setGoal', _goalArgs(meters, roundTrip));
+      await _refresh();
+    } else {
+      pendingGoalM = meters;
+      pendingGoalRound = roundTrip;
+      notifyListeners();
+    }
+  }
+
   /// Applies the "Автозапись 24/7" setting: starts or stops the movement watcher.
   /// The step counter needs the "physical activity" permission.
   Future<void> applyAutoMode() async {
@@ -275,7 +318,14 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _log.log('START', 'UI requested start resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
 
     if (Platform.isAndroid) {
-      await _sys.invokeMethod('startTracking', _serviceArgs(mode, session: resumeSessionId, routeId: routeId));
+      final args = _serviceArgs(mode, session: resumeSessionId, routeId: routeId);
+      if (pendingGoalM > 0) {
+        args.addAll(_goalArgs(pendingGoalM, pendingGoalRound));
+        _log.log('GOAL', 'start with goal ${pendingGoalM.round()} m roundTrip=$pendingGoalRound');
+      }
+      pendingGoalM = 0;
+      pendingGoalRound = false;
+      await _sys.invokeMethod('startTracking', args);
       // Give the service a moment to publish its state.
       for (var i = 0; i < 10 && !recording; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 200));

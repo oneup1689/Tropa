@@ -43,6 +43,11 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         const val ACTION_UNWATCH = "app.tropa.tropa.UNWATCH"
         const val ACTION_PAUSE = "app.tropa.tropa.PAUSE"
         const val ACTION_RESUME = "app.tropa.tropa.RESUME"
+        const val ACTION_GOAL = "app.tropa.tropa.GOAL"
+        const val EXTRA_GOAL_M = "goalM"
+        const val EXTRA_GOAL_ROUND = "goalRound"
+        const val EXTRA_GOAL_LABEL = "goalLabel"
+        const val EXTRA_GOAL_HALF_LABEL = "goalHalfLabel"
         const val EXTRA_SESSION = "session"
         const val EXTRA_MAX_ACC = "maxAccuracy"
         const val EXTRA_INTERVAL = "intervalMs"
@@ -88,6 +93,9 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         @Volatile var offRouteM = -1.0 // distance from the loaded route, -1 when no route / unknown
         @Volatile var motionSensor = "none" // what 24/7 mode uses to notice movement: steps / significant / none
         @Volatile var activeMode = "mixed" // travel mode of the session being recorded
+        @Volatile var goalM = 0.0 // distance goal of this walk in metres, 0 = none
+        @Volatile var goalRound = false // out-and-back: the half-way notification asks to turn around
+        @Volatile var goalStage = 0 // 0 = not yet, 1 = half passed, 2 = goal reached
 
         fun status(): Map<String, Any> = mapOf(
             "running" to running,
@@ -105,6 +113,9 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             "offRoute" to offRouteM,
             "motionSensor" to motionSensor,
             "mode" to activeMode,
+            "goalM" to goalM,
+            "goalRound" to goalRound,
+            "goalStage" to goalStage,
             "sinceFix" to (if ((running || watching) && lastFixAt > 0) (System.currentTimeMillis() - lastFixAt) / 1000 else 0L)
         )
 
@@ -152,6 +163,10 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private val probeBuffer = ArrayList<Location>()
     private var cooldownUntil = 0L
     private var motionTrigger: TriggerEventListener? = null
+
+    // distance goal: how it is shown in notifications (formatted by the app in the person's units)
+    private var goalLabel = ""
+    private var goalHalfLabel = ""
 
     // navigation along an imported route
     private val route by lazy { RouteGuard(this) }
@@ -207,6 +222,15 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 if (state == State.RECORD && manualPause) leaveManualPause("button")
                 return START_STICKY
             }
+            ACTION_GOAL -> {
+                // Set, changed or cleared (0 m) while a walk is recorded.
+                if (state == State.RECORD) applyGoalFromIntent(intent, prefs)
+                if (state == State.IDLE) { // nothing is recorded: do not leave an idle service behind
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                return START_STICKY
+            }
             ACTION_UNWATCH -> {
                 prefs.edit().putBoolean(KEY_AUTO, false).apply()
                 if (state == State.WATCH || state == State.PROBE || state == State.IDLE) {
@@ -228,6 +252,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             intent?.action == ACTION_START -> {
                 if (state == State.RECORD) return START_STICKY
                 startRecording(intent.getLongExtra(EXTRA_SESSION, 0L), auto = false, restarted = false)
+                if (intent.getDoubleExtra(EXTRA_GOAL_M, 0.0) > 0) applyGoalFromIntent(intent, prefs)
             }
             intent == null || intent.action == null -> {
                 // Restarted by the system (or after a reboot): continue where we left off.
@@ -461,6 +486,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         }
         // A restart after a kill must also remember the id of the session in progress.
         prefs.edit().putLong(KEY_SESSION, sessionId).apply()
+        // A continued session keeps its goal (also after a restart by the system); a new one starts without.
+        if (resumeId > 0) loadGoal(prefs) else clearGoal(prefs)
         log(
             this, "SVC",
             "settings: mode=$modeCode maxAccuracy=${maxAccuracy}m interval=${intervalMs}ms jump=${jumpSpeed}m/s " +
@@ -501,6 +528,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         }
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         prefs.edit().remove(KEY_SESSION).remove("route_id").apply()
+        clearGoal(prefs) // the goal belongs to one walk
         log(this, "SVC", "stopped session=$id points=$points dist=${distanceM.toInt()}m auto=$autoSession")
         stopLocation()
         unregisterPressureSensor()
@@ -541,7 +569,68 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         startMs = System.currentTimeMillis()
         sessionDay = dayOf(startMs)
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(KEY_SESSION, sessionId).apply()
+        clearGoal(getSharedPreferences(PREFS, MODE_PRIVATE))
         log(this, "SVC", "midnight: session $old closed, new session=$sessionId")
+    }
+
+    // ------------------------------------------------------------------ distance goal
+
+    private fun applyGoalFromIntent(intent: Intent, prefs: android.content.SharedPreferences) {
+        val meters = intent.getDoubleExtra(EXTRA_GOAL_M, 0.0)
+        if (meters <= 0) {
+            clearGoal(prefs)
+            log(this, "GOAL", "goal cleared")
+            return
+        }
+        goalM = meters
+        goalRound = intent.getBooleanExtra(EXTRA_GOAL_ROUND, false)
+        goalLabel = intent.getStringExtra(EXTRA_GOAL_LABEL) ?: ""
+        goalHalfLabel = intent.getStringExtra(EXTRA_GOAL_HALF_LABEL) ?: ""
+        // Already past a threshold when the goal is set: that part counts as done silently, no old news.
+        goalStage = when {
+            distanceM >= goalM -> 2
+            goalRound && distanceM >= goalM / 2 -> 1
+            else -> 0
+        }
+        prefs.edit().putLong("goal_m", meters.toLong()).putBoolean("goal_round", goalRound)
+            .putString("goal_label", goalLabel).putString("goal_half_label", goalHalfLabel)
+            .putInt("goal_stage", goalStage).apply()
+        log(this, "GOAL", "goal ${meters.toInt()} m roundTrip=$goalRound, now ${distanceM.toInt()} m, stage=$goalStage")
+    }
+
+    private fun loadGoal(prefs: android.content.SharedPreferences) {
+        goalM = prefs.getLong("goal_m", 0L).toDouble()
+        goalRound = prefs.getBoolean("goal_round", false)
+        goalLabel = prefs.getString("goal_label", "") ?: ""
+        goalHalfLabel = prefs.getString("goal_half_label", "") ?: ""
+        goalStage = prefs.getInt("goal_stage", 0)
+        if (goalM > 0) log(this, "GOAL", "goal restored: ${goalM.toInt()} m roundTrip=$goalRound stage=$goalStage")
+    }
+
+    private fun clearGoal(prefs: android.content.SharedPreferences) {
+        goalM = 0.0
+        goalRound = false
+        goalStage = 0
+        goalLabel = ""
+        goalHalfLabel = ""
+        prefs.edit().remove("goal_m").remove("goal_round").remove("goal_label").remove("goal_half_label").remove("goal_stage").apply()
+    }
+
+    /** One notification at the half-way point (out-and-back) and one when the goal is reached; recording goes on. */
+    private fun checkGoal() {
+        if (goalM <= 0 || goalStage >= 2) return
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (distanceM >= goalM) {
+            goalStage = 2
+            prefs.edit().putInt("goal_stage", 2).apply()
+            log(this, "GOAL", "goal reached at ${distanceM.toInt()} m")
+            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Цель достигнута"), Tr.goalDone(this, goalLabel), "🎯")
+        } else if (goalRound && goalStage == 0 && distanceM >= goalM / 2) {
+            goalStage = 1
+            prefs.edit().putInt("goal_stage", 1).apply()
+            log(this, "GOAL", "half way at ${distanceM.toInt()} m")
+            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Половина пути пройдена"), Tr.goalHalf(this, goalHalfLabel), "🎯")
+        }
     }
 
     private fun loadSessionStats(database: SQLiteDatabase, id: Long) {
@@ -753,6 +842,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             "${"%.6f".format(lat)},${"%.6f".format(lon)} acc=${"%.1f".format(acc)} spd=${"%.2f".format(speed)} " +
                 (if (moving) "stored" else "stored(still)") + (if (lastPressure > 0) " p=${"%.1f".format(lastPressure)}" else "")
         )
+
+        checkGoal()
 
         if (route.loaded) {
             route.evaluate(

@@ -630,8 +630,10 @@ class _HomePageState extends State<HomePage> {
                 Expanded(flex: 5, child: Padding(padding: const EdgeInsets.only(right: 12), child: _stat(Units.dist(rec.distanceM), t('Дистанция')))),
                 Expanded(
                     flex: 4,
-                    child: _stat(recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—',
-                        rec.autoPaused || rec.manualPause ? t('Пауза') : t('В движении'))),
+                    child: Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: _stat(recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—',
+                            rec.autoPaused || rec.manualPause ? t('Пауза') : t('В движении')))),
                 Expanded(
                   flex: 4,
                   child: _stat(
@@ -642,6 +644,10 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ]),
+              if (recording && rec.goalM > 0) ...[
+                const SizedBox(height: 16),
+                _goalProgress(),
+              ],
               const SizedBox(height: 22),
               _recordButton(recording),
               if (recording) ...[
@@ -732,7 +738,81 @@ class _HomePageState extends State<HomePage> {
             ]),
           ),
         ),
+      if (Platform.isAndroid) _goalChip(),
     ]);
+  }
+
+  // ------------------------------------------------------------------ distance goal
+
+  /// A chip next to the travel modes: opens the goal sheet; shows the goal once it is set.
+  Widget _goalChip() {
+    final goal = rec.activeGoalM;
+    final set = goal > 0;
+    final fg = set ? TropaColors.forestDeep : Colors.white;
+    return GestureDetector(
+      onTap: _openGoalSheet,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: set ? TropaColors.mint : const Color(0x26FFFFFF),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.flag_outlined, size: 17, color: fg),
+          const SizedBox(width: 6),
+          Text(
+            set ? '${t('Цель')} ${Units.distTrim(goal)}${rec.activeGoalRound ? ' ↔' : ''}' : t('Цель'),
+            style: TextStyle(fontSize: 13.5, fontVariations: const [FontVariation('wght', 600)], color: fg),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// Progress of the goal while recording: a bar and what is left.
+  Widget _goalProgress() {
+    final goal = rec.goalM;
+    final done = rec.goalStage >= 2 || rec.distanceM >= goal;
+    final left = (goal - rec.distanceM).clamp(0, goal).toDouble();
+    final text = done
+        ? t('Цель достигнута')
+        : (rec.goalRound && rec.goalStage == 1
+            ? t('Идём обратно: осталось {a}', {'a': Units.dist(left, digits: 1)})
+            : t('До цели {a}', {'a': Units.dist(left, digits: 1)}));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Icon(done ? Icons.check_circle : Icons.flag_outlined, size: 16, color: done ? TropaColors.mint : Colors.white70),
+        const SizedBox(width: 6),
+        Expanded(child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 13.5))),
+        Text('${Units.distTrim(goal)}${rec.goalRound ? ' ↔' : ''}', style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
+      ]),
+      const SizedBox(height: 6),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Stack(children: [
+          LinearProgressIndicator(
+            value: (rec.distanceM / goal).clamp(0, 1).toDouble(),
+            minHeight: 7,
+            backgroundColor: const Color(0x33FFFFFF),
+            color: done ? TropaColors.mint : TropaColors.orange,
+          ),
+          // The half-way mark of an out-and-back goal.
+          if (rec.goalRound) Positioned.fill(child: Align(child: Container(width: 2, height: 7, color: Colors.white70))),
+        ]),
+      ),
+    ]);
+  }
+
+  Future<void> _openGoalSheet() async {
+    final result = await showModalBottomSheet<({double meters, bool round})>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _GoalSheet(currentMeters: rec.activeGoalM, currentRound: rec.activeGoalRound),
+    );
+    if (result == null || !mounted) return;
+    await rec.setGoal(result.meters, roundTrip: result.round);
   }
 
   Widget _recordButton(bool recording) {
@@ -941,6 +1021,92 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
         const SizedBox(width: 8),
         Text(widget.label,
             style: const TextStyle(color: Colors.white, fontSize: 12.5, letterSpacing: 0.8, fontVariations: [FontVariation('wght', 700)])),
+      ]),
+    );
+  }
+}
+
+/// The "goal for this walk" sheet: presets, own value, out-and-back switch. Pops with the chosen goal
+/// (0 metres = remove the goal) or with nothing when closed. It owns its text controller.
+class _GoalSheet extends StatefulWidget {
+  final double currentMeters;
+  final bool currentRound;
+
+  const _GoalSheet({required this.currentMeters, required this.currentRound});
+
+  @override
+  State<_GoalSheet> createState() => _GoalSheetState();
+}
+
+class _GoalSheetState extends State<_GoalSheet> {
+  late final List<double> presets = Units.imperial ? const [2.0, 3.0, 5.0, 10.0] : const [3.0, 5.0, 10.0, 15.0];
+  late final double toMeters = Units.imperial ? 1609.344 : 1000.0;
+  late final TextEditingController custom = TextEditingController();
+  late double value = widget.currentMeters / toMeters;
+  late bool round = widget.currentRound;
+
+  @override
+  void initState() {
+    super.initState();
+    if (value > 0 && !presets.contains(value)) {
+      custom.text = value == value.roundToDouble() ? value.round().toString() : value.toStringAsFixed(1);
+    }
+  }
+
+  @override
+  void dispose() {
+    custom.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final unit = Units.kmUnit;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(t('Цель на прогулку'), style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 4),
+        Text(t('Положите телефон в карман: когда цель будет выполнена, придёт уведомление. Запись не остановится.'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+        const SizedBox(height: 14),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final p in presets)
+            ChoiceChip(
+              label: Text('${p.round()} $unit'),
+              selected: value == p,
+              onSelected: (_) => setState(() {
+                value = p;
+                custom.clear();
+              }),
+            ),
+        ]),
+        const SizedBox(height: 12),
+        TextField(
+          controller: custom,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(labelText: t('Своё значение'), suffixText: unit),
+          onChanged: (v) => setState(() => value = double.tryParse(v.replaceAll(',', '.')) ?? 0),
+        ),
+        const SizedBox(height: 4),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(t('Туда и обратно')),
+          subtitle: Text(t('Уведомим на половине пути: пора разворачиваться. Цель считается по общей дистанции.')),
+          value: round,
+          onChanged: (v) => setState(() => round = v),
+        ),
+        const SizedBox(height: 8),
+        Row(children: [
+          if (widget.currentMeters > 0)
+            TextButton(onPressed: () => Navigator.pop(context, (meters: 0.0, round: false)), child: Text(t('Убрать цель'))),
+          const Spacer(),
+          FilledButton(
+            onPressed: value > 0 && value <= 1000 ? () => Navigator.pop(context, (meters: value * toMeters, round: round)) : null,
+            child: Text(t('Готово')),
+          ),
+        ]),
       ]),
     );
   }
