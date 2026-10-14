@@ -26,7 +26,10 @@ class SessionInfo {
   final int pointCount;
   final String mode; // TravelMode.code
 
-  SessionInfo(this.id, this.startMs, this.endMs, this.status, this.pointCount, [this.mode = 'mixed']);
+  /// The name the person gave to the walk, empty when none.
+  final String title;
+
+  SessionInfo(this.id, this.startMs, this.endMs, this.status, this.pointCount, [this.mode = 'mixed', this.title = '']);
 }
 
 /// A note attached to a place and time of a walk. Photos and videos live in the phone gallery;
@@ -67,7 +70,7 @@ class TrackDb {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'tropa.db'),
-      version: 6,
+      version: 7,
       onUpgrade: (db, oldVersion, _) async {
         // The native service may already have added some columns; ignore duplicates.
         if (oldVersion < 2) {
@@ -85,6 +88,11 @@ class TrackDb {
         if (oldVersion < 6) {
           try {
             await db.execute('ALTER TABLE session_meta ADD COLUMN elevation TEXT');
+          } catch (_) {}
+        }
+        if (oldVersion < 7) {
+          try {
+            await db.execute('ALTER TABLE session_meta ADD COLUMN title TEXT');
           } catch (_) {}
         }
       },
@@ -112,7 +120,7 @@ class TrackDb {
         'session_id INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, mode TEXT NOT NULL)');
     // Poster data fetched from the internet once and kept: place name, weather (JSON), manual water temperature.
     await db.execute('CREATE TABLE IF NOT EXISTS session_meta('
-        'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT)');
+        'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT, title TEXT)');
     await db.execute('CREATE TABLE IF NOT EXISTS routes('
         'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL)');
     await db.execute('CREATE TABLE IF NOT EXISTS route_points('
@@ -182,8 +190,17 @@ class TrackDb {
     final id = r['id'] as int;
     final c = Sqflite.firstIntValue(
         await db.rawQuery('SELECT COUNT(*) FROM points WHERE session_id = ?', [id]));
+    final meta = await db.query('session_meta', columns: ['title'], where: 'session_id = ?', whereArgs: [id]);
+    final title = meta.isEmpty ? '' : ((meta.first['title'] as String?) ?? '');
     return SessionInfo(
-        id, r['start_ms'] as int, r['end_ms'] as int?, r['status'] as String, c ?? 0, (r['mode'] as String?) ?? 'mixed');
+        id, r['start_ms'] as int, r['end_ms'] as int?, r['status'] as String, c ?? 0, (r['mode'] as String?) ?? 'mixed',
+        title);
+  }
+
+  /// Changes the travel mode of a finished walk (the segments are then built for the new mode).
+  Future<void> setSessionMode(int id, String mode) async {
+    final db = await database;
+    await db.update('sessions', {'mode': mode}, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<List<TrackPoint>> points(int sessionId) async {

@@ -1,5 +1,6 @@
 package app.tropa.tropa
 
+import android.app.PendingIntent
 import android.app.Service
 import android.content.ContentValues
 import android.content.Context
@@ -44,6 +45,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         const val ACTION_PAUSE = "app.tropa.tropa.PAUSE"
         const val ACTION_RESUME = "app.tropa.tropa.RESUME"
         const val ACTION_GOAL = "app.tropa.tropa.GOAL"
+        const val ACTION_SET_MODE = "app.tropa.tropa.SET_MODE"
         const val EXTRA_GOAL_M = "goalM"
         const val EXTRA_GOAL_ROUND = "goalRound"
         const val EXTRA_GOAL_LABEL = "goalLabel"
@@ -65,6 +67,10 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         private const val HEARTBEAT_MS = 10_000L // check cadence; full log line every 3rd tick
         private const val NO_SIGNAL_MS = 45_000L
         private const val WATCHDOG_MS = 90_000L
+        private val WATCHDOG_BACKOFF_MS = longArrayOf(60_000L, 120_000L, 300_000L, 600_000L)
+        private const val VEHICLE_SPEED_MS = 4.2 // 15 km/h: a sustained faster pace in walk mode is a vehicle
+        private const val VEHICLE_AFTER_MS = 60_000L
+        private const val MAX_PLAUSIBLE_MS = 70.0 // 252 km/h: faster than any Doppler reading we trust
         private const val STATIONARY_STORE_MS = 15_000L
         private const val GAP_MS = 30_000L
         private const val PAUSE_AFTER_MS = 60_000L // standing this long -> low-power GPS rate
@@ -153,6 +159,14 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private var beatCount = 0
     private var lastPressure = 0f
     private var pendingFix: Location? = null
+    private var gnssCallback: Any? = null // android.location.GnssStatus.Callback (API 24+), kept untyped for old phones
+    private var storedLogCount = 0
+    private var satsVisible = -1
+    private var satsUsed = -1
+    private var watchdogLevel = 0 // how many times in a row GPS was re-requested without a fix
+    private var nextWatchdogWall = 0L
+    private var fastSinceWall = 0L // when the speed rose above walking pace, 0 = not fast now
+    private var modeHintShown = false // the "you seem to be driving" hint is offered once per walk
     private var pausePos: Location? = null
     private var gpsOffWhileWatching = false
 
@@ -220,6 +234,14 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             }
             ACTION_RESUME -> {
                 if (state == State.RECORD && manualPause) leaveManualPause("button")
+                return START_STICKY
+            }
+            ACTION_SET_MODE -> {
+                intent.getStringExtra(EXTRA_MODE)?.let { applyModeChange(it) }
+                if (state == State.IDLE) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 return START_STICKY
             }
             ACTION_GOAL -> {
@@ -496,6 +518,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
 
         autoSession = auto
         activeMode = modeCode
+        fastSinceWall = 0L
+        modeHintShown = false
         lowPower = false
         manualPause = false
         pausePos = null
@@ -511,6 +535,9 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         running = true
         watching = false
         registerPressureSensor()
+        registerSatellites()
+        watchdogLevel = 0
+        nextWatchdogWall = 0L
         requestUpdates(intervalMs)
         ensureHeartbeat()
         updateNotification(Tr.t(this, "Идёт запись маршрута"))
@@ -532,6 +559,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         log(this, "SVC", "stopped session=$id points=$points dist=${distanceM.toInt()}m auto=$autoSession")
         stopLocation()
         unregisterPressureSensor()
+        unregisterSatellites()
+        Notifier.cancel(this, Notifier.MODE_HINT_ID)
         releaseWakeLock()
         route.clear()
         offRouteM = -1.0
@@ -724,6 +753,38 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         }
     }
 
+    /** Satellite counts are only logged while the signal is missing, to tell "indoors" from "GPS chip asleep". */
+    private fun registerSatellites() {
+        if (Build.VERSION.SDK_INT < 24 || gnssCallback != null) return
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        val cb = object : android.location.GnssStatus.Callback() {
+            override fun onSatelliteStatusChanged(status: android.location.GnssStatus) {
+                var used = 0
+                for (i in 0 until status.satelliteCount) if (status.usedInFix(i)) used++
+                satsVisible = status.satelliteCount
+                satsUsed = used
+            }
+        }
+        try {
+            (getSystemService(Context.LOCATION_SERVICE) as LocationManager).registerGnssStatusCallback(cb, handler)
+            gnssCallback = cb
+        } catch (e: Exception) {
+            log(this, "SVC", "satellite status unavailable: $e")
+        }
+    }
+
+    private fun unregisterSatellites() {
+        if (Build.VERSION.SDK_INT < 24) return
+        val cb = gnssCallback ?: return
+        try {
+            (getSystemService(Context.LOCATION_SERVICE) as LocationManager).unregisterGnssStatusCallback(cb as android.location.GnssStatus.Callback)
+        } catch (_: Exception) {
+        }
+        gnssCallback = null
+        satsVisible = -1
+        satsUsed = -1
+    }
+
     private fun registerPressureSensor() {
         val sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensors = sm
@@ -770,6 +831,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         var skip: String? = null
         var dist = 0f
         var dtSec = 0.0
+        var dopplerOk = false
 
         if (acc > maxAccuracy) {
             skip = "acc>${maxAccuracy.toInt()}"
@@ -790,7 +852,15 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 }
                 skip ="poor first fix after gap (acc=${"%.1f".format(acc)})"
             } else if (dtSec > 0 && dist / dtSec > jumpSpeed && acc > 8f) {
-                skip = "speed jump ${"%.1f".format(dist / dtSec * 3.6)} km/h"
+                // The implied speed is compared with the speed the GPS chip measures itself (Doppler):
+                // a car in a walking-mode walk is fast, not a jump. Without this every following fix was
+                // compared with the last stored one and rejected until the vehicle stopped.
+                if (dopplerConfirms(loc, dist / dtSec)) {
+                    dopplerOk = true
+                } else {
+                    skip = "speed jump ${"%.1f".format(dist / dtSec * 3.6)} km/h" +
+                        (if (loc.hasSpeed()) " doppler=${"%.1f".format(loc.speed * 3.6)} km/h" else "")
+                }
             }
         }
         if (skip != null) {
@@ -803,7 +873,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         // A "teleport" (position jumps far faster than anyone can travel, even with a good fix) is a new
         // starting point, not distance: it must not inflate the distance or the moving time.
         val speedNow = if (prev != null && dtSec > 0) dist / dtSec else 0.0
-        val teleport = prev != null && dtSec > 0 && speedNow > jumpSpeed * 3
+        val teleport = prev != null && dtSec > 0 && speedNow > jumpSpeed * 3 && !dopplerOk
         if (teleport) log(this, "FIX", "TELEPORT ${dist.toInt()} m in ${"%.1f".format(dtSec)}s: counted as a new start, no distance")
 
         // Moving time and auto-pause. Leaving low power on displacement alone, so a start is not missed.
@@ -837,12 +907,16 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         lastLat = lat
         lastLon = lon
         if (moving) lastStored = loc.also { it.latitude = lat; it.longitude = lon } else lastStored = Location(prev).also { it.time = loc.time }
-        log(
-            this, "FIX",
-            "${"%.6f".format(lat)},${"%.6f".format(lon)} acc=${"%.1f".format(acc)} spd=${"%.2f".format(speed)} " +
-                (if (moving) "stored" else "stored(still)") + (if (lastPressure > 0) " p=${"%.1f".format(lastPressure)}" else "")
-        )
+        // Ordinary stored fixes are the bulk of the log: only every 10th is written. Anything unusual is always logged.
+        if (dopplerOk || storedLogCount++ % 10 == 0) {
+            log(
+                this, "FIX",
+                "${"%.6f".format(lat)},${"%.6f".format(lon)} acc=${"%.1f".format(acc)} spd=${"%.2f".format(speed)} " +
+                    (if (moving) "stored" else "stored(still)") + (if (dopplerOk) " doppler-confirmed" else "") + (if (lastPressure > 0) " p=${"%.1f".format(lastPressure)}" else "")
+            )
+        }
 
+        if (moving) watchForVehicle(now, speed) // speed from the distance: some GPS chips report a Doppler speed of 0
         checkGoal()
 
         if (route.loaded) {
@@ -891,6 +965,67 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         if (d < maxOf(RESUME_DISTANCE_M, acc)) return false
         leaveManualPause("moved ${d.toInt()} m")
         return true
+    }
+
+    /**
+     * A walk recorded in "walk" mode that goes on faster than a person can walk for a minute: offer to
+     * switch to the vehicle mode once (a notification with a button, so it works with the screen off).
+     */
+    private fun watchForVehicle(now: Long, speedMs: Double) {
+        if (modeCode != "walk" || modeHintShown) return
+        if (speedMs < VEHICLE_SPEED_MS) {
+            if (speedMs < VEHICLE_SPEED_MS * 0.7) fastSinceWall = 0L // short slow-down at a junction is tolerated
+            return
+        }
+        if (fastSinceWall == 0L) fastSinceWall = now
+        if (now - fastSinceWall < VEHICLE_AFTER_MS) return
+        modeHintShown = true
+        log(this, "MODE_HINT", "moving faster than ${"%.0f".format(VEHICLE_SPEED_MS * 3.6)} km/h for ${VEHICLE_AFTER_MS / 1000}s in walk mode, suggesting mixed mode")
+        Notifier.postModeHint(
+            this,
+            Tr.t(this, "Похоже, вы едете"),
+            Tr.t(this, "Выбран режим «Пешком». Переключить на «Смешанный» (пешком и транспорт)?"),
+            Tr.t(this, "Переключить на Смешанный"),
+            PendingIntent.getService(
+                this, 7, Intent(this, TrackingService::class.java).setAction(ACTION_SET_MODE).putExtra(EXTRA_MODE, "mixed"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        )
+    }
+
+    /** The person (or the notification button) changed the travel mode of the walk in progress. */
+    private fun applyModeChange(newMode: String) {
+        if (state != State.RECORD) return
+        when (newMode) {
+            "walk" -> { jumpSpeed = 10.0; movingSpeed = 0.4 }
+            "bike" -> { jumpSpeed = 25.0; movingSpeed = 0.8 }
+            "car" -> { jumpSpeed = 70.0; movingSpeed = 2.0 }
+            "water" -> { jumpSpeed = 15.0; movingSpeed = 0.3 }
+            else -> { jumpSpeed = 70.0; movingSpeed = 0.5 }
+        }
+        modeCode = newMode
+        activeMode = newMode
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("mode", newMode)
+            .putFloat("jump", jumpSpeed.toFloat()).putFloat("moving", movingSpeed.toFloat()).apply()
+        try {
+            db?.execSQL("UPDATE sessions SET mode=? WHERE id=?", arrayOf<Any>(newMode, sessionId))
+        } catch (e: Exception) {
+            log(this, "SVC", "failed to save the new mode: $e")
+        }
+        Notifier.cancel(this, Notifier.MODE_HINT_ID)
+        log(this, "MODE_HINT", "travel mode changed to $newMode (jump=${jumpSpeed}m/s)")
+    }
+
+    /**
+     * True when the speed measured by the GPS chip (Doppler, independent of position noise) agrees with the
+     * speed implied by the distance from the last stored point: the movement is real, however fast it is.
+     */
+    private fun dopplerConfirms(loc: Location, impliedSpeed: Double): Boolean {
+        if (!loc.hasSpeed() || loc.speed <= 0f || loc.speed > MAX_PLAUSIBLE_MS) return false
+        if (Build.VERSION.SDK_INT >= 26 && loc.hasSpeedAccuracy() && loc.speedAccuracyMetersPerSecond > 2.5f) return false
+        // The chord between two points is never longer than the path, so the implied speed may be lower
+        // than the Doppler speed in curves, but it must not be much higher.
+        return impliedSpeed <= loc.speed * 1.3 && impliedSpeed >= loc.speed * 0.5
     }
 
     /** True when [loc] lies close to the previously rejected poor fix, i.e. the position has stabilised. */
@@ -976,10 +1111,19 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             )
             updateNotification(Tr.points(this, points, "%.2f".format(distanceM / 1000)))
         }
-        if (gpsOn && sinceMs > WATCHDOG_MS) {
-            log(this, "WATCHDOG", "no fixes for >${WATCHDOG_MS / 1000}s, re-requesting updates")
-            lastFixWall = now - NO_SIGNAL_MS // keep the alert state, retry in ~45s
+        if (gpsOn && sinceMs > NO_SIGNAL_MS && beatCount % 3 == 0 && satsVisible >= 0) {
+            log(this, "SATS", "no fixes for ${sinceMs / 1000}s, satellites visible=$satsVisible usedInFix=$satsUsed")
+        }
+        if (!gpsOn || sinceMs <= WATCHDOG_MS) {
+            watchdogLevel = 0
+            nextWatchdogWall = 0L
+        } else if (now >= nextWatchdogWall) {
+            // Re-registering helps with a GPS chip that went to sleep, but indoors it only wakes the chip up again
+            // and again: the pauses between attempts grow (90 s, then 2, 5, 10 min).
+            log(this, "WATCHDOG", "no fixes for ${sinceMs / 1000}s, re-requesting updates (attempt ${watchdogLevel + 1})")
             requestUpdates(intervalMs)
+            nextWatchdogWall = now + WATCHDOG_BACKOFF_MS[minOf(watchdogLevel, WATCHDOG_BACKOFF_MS.size - 1)]
+            watchdogLevel++
         }
 
         // 24/7: a session that started by itself ends after a quiet period.

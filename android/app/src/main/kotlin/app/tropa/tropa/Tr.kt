@@ -31,6 +31,9 @@ object Tr {
         "Не забудьте включить запись трека." to "Do not forget to start recording the track.",
         "Цель достигнута" to "Goal reached",
         "Половина пути пройдена" to "Halfway there",
+        "Похоже, вы едете" to "It looks like you are driving",
+        "Выбран режим «Пешком». Переключить на «Смешанный» (пешком и транспорт)?" to "Walk mode is selected. Switch to Mixed (walking and vehicle)?",
+        "Переключить на Смешанный" to "Switch to Mixed",
     )
 
     fun setLanguage(ctx: Context, code: String) {

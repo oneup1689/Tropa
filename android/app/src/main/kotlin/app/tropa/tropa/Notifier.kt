@@ -16,6 +16,7 @@ object Notifier {
     const val ALERT_ID = 1002
     const val ROUTE_ALERT_ID = 1003
     const val GOAL_ID = 1004
+    const val MODE_HINT_ID = 1005
 
     private fun manager(c: Context) = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -61,6 +62,18 @@ object Notifier {
             .setAutoCancel(true)
             .build()
         manager(c).notify(id, n)
+    }
+
+    /** Quiet suggestion with one action button (no sound: it is a question, not an alarm). */
+    fun postModeHint(c: Context, title: String, text: String, actionLabel: String, action: PendingIntent) {
+        val b = builder(c, CHANNEL_ID).setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_stat_tropa)
+            .setContentIntent(openApp(c, 2))
+            .setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, actionLabel, action).build())
+        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(10 * 60_000L)
+        manager(c).notify(MODE_HINT_ID, b.build())
     }
 
     fun cancel(c: Context, id: Int) = manager(c).cancel(id)

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'data_section.dart';
 import 'l10n.dart';
 import 'recorder.dart';
 import 'settings.dart';
@@ -13,6 +14,7 @@ IconData _sectionIcon(String section) => switch (section) {
       'Запись' => Icons.fiber_manual_record_outlined,
       'Маршрут и данные' => Icons.route_outlined,
       'Навигация' => Icons.navigation_outlined,
+      'Данные' => Icons.folder_outlined,
       _ => Icons.tune,
     };
 
@@ -76,7 +78,17 @@ class SettingsPage extends StatelessWidget {
                     for (final d in visible.where((d) => d.section == section)) _tile(context, s, d),
                   ]),
                 ),
+                if (section == 'Автоматическая запись') const PlannerTile(),
               ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 22, 4, 6),
+                child: Row(children: [
+                  Icon(_sectionIcon('Данные'), size: 18, color: cs.primary),
+                  const SizedBox(width: 8),
+                  Text(t('Данные'), style: Theme.of(context).textTheme.titleSmall?.copyWith(color: cs.primary)),
+                ]),
+              ),
+              const DataSection(),
               if (s.pro)
                 Padding(
                   padding: const EdgeInsets.only(top: 20),

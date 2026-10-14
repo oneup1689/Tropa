@@ -138,3 +138,6 @@ Color gradientColor(List<Color> stops, double t) {
 /// Speed palette (slow to fast) and height palette (low to high) of the poster line.
 const List<Color> speedStops = [Color(0xFF2979FF), Color(0xFF00E5FF), Color(0xFF76FF03), Color(0xFFFFEA00), Color(0xFFFF6D00), Color(0xFFFF1744)];
 const List<Color> heightStops = [Color(0xFF00BFA5), Color(0xFFAEEA00), Color(0xFFFFD600), Color(0xFFFF6D00), Color(0xFFD50000)];
+
+/// Slope palette of the poster line: steep descent (cold) through flat (pale) to steep climb (hot).
+const List<Color> slopeStops = [Color(0xFF2979FF), Color(0xFF4DD0E1), Color(0xFFE0F2F1), Color(0xFFFFB300), Color(0xFFD50000)];

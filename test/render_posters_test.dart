@@ -126,5 +126,61 @@ void main() {
       ];
       await write('8_multi', composeMultiPoster(o: PosterOptions()..format = PosterFormat.horizontal..title = 'Ниньбинь: неделя в движении'..region = 'Ниньбинь, Вьетнам', routes: multi, scale: 1));
     });
-  }, skip: !gpx.existsSync());
+  }, skip: !gpx.existsSync(), timeout: const Timeout(Duration(minutes: 6)));
+
+  // The v26 line colourings on walk 8 (a walk and a taxi ride): one poster per colouring, for choosing by eye.
+  final gpx8 = File('test/tropa_8.gpx');
+  testWidgets('render the line colourings of walk 8', (tester) async {
+    await tester.runAsync(() async {
+      await _loadFont('Rubik', 'assets/fonts/Rubik-Variable.ttf');
+      await _loadFont('Unbounded', 'assets/fonts/Unbounded-Variable.ttf');
+      final re = RegExp(r'<trkpt lat="([\d.\-]+)" lon="([\d.\-]+)"><ele>([\d.\-]+)</ele><time>([^<]+)</time>');
+      List<TrackPoint> load(File f) => [
+            for (final m in re.allMatches(f.readAsStringSync()))
+              TrackPoint(DateTime.parse(m.group(4)!).millisecondsSinceEpoch, double.parse(m.group(1)!), double.parse(m.group(2)!), 5,
+                  double.parse(m.group(3)!), 0)
+          ];
+      Directory('dist/posters').createSync(recursive: true);
+      Future<void> write(String name, Future<Uint8List> png) async {
+        final bytes = await png;
+        try {
+          File('dist/posters/$name.png').writeAsBytesSync(bytes);
+        } on FileSystemException {
+          File('dist/posters/${name}_new.png').writeAsBytesSync(bytes);
+        }
+      }
+
+      final pts = load(gpx8);
+      final segs = buildSegments(pts, TravelMode.walk); // walk mode, but the taxi ride is found by speed
+      for (final c in [LineColoring.single, LineColoring.speed, LineColoring.height]) {
+        final o = PosterOptions()
+          ..title = 'Магазин и такси'
+          ..region = 'Ниньбинь, Вьетнам'
+          ..coloring = c;
+        await write('9_walk8_${c.name}', composePoster(o: o, pts: pts, segments: segs, mode: TravelMode.walk, scale: 1));
+      }
+      // A real climb for the slope colouring (walk 5, Hang Mua).
+      final hill = File('test/tropa_5.gpx');
+      if (hill.existsSync()) {
+        final hp = load(hill);
+        final o = PosterOptions()
+          ..title = 'Хан-Муа'
+          ..region = 'Ниньбинь, Вьетнам'
+          ..coloring = LineColoring.slope;
+        await write('9_walk5_slope', composePoster(o: o, pts: hp, segments: buildSegments(hp, TravelMode.walk), mode: TravelMode.walk, scale: 1));
+        final w = PosterOptions()
+          ..format = PosterFormat.horizontal
+          ..title = 'Хан-Муа'
+          ..region = 'Ниньбинь, Вьетнам'
+          ..coloring = LineColoring.slope;
+        await write('9_walk5_slope_wide', composeWidePoster(o: w, pts: hp, segments: buildSegments(hp, TravelMode.walk), mode: TravelMode.walk, scale: 1));
+      }
+      final wide = PosterOptions()
+        ..format = PosterFormat.horizontal
+        ..title = 'Магазин и такси'
+        ..region = 'Ниньбинь, Вьетнам'
+        ..coloring = LineColoring.speed;
+      await write('9_walk8_wide_speed', composeWidePoster(o: wide, pts: pts, segments: segs, mode: TravelMode.walk, scale: 1));
+    });
+  }, skip: !gpx8.existsSync(), timeout: const Timeout(Duration(minutes: 3)));
 }

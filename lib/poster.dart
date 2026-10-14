@@ -17,6 +17,8 @@ import 'segments.dart';
 import 'settings.dart';
 import 'stats.dart';
 import 'trim.dart';
+import 'poster_scale.dart';
+export 'poster_scale.dart' show LineColoring, LineScale, slopeAvailable;
 import 'weather.dart';
 import 'l10n.dart';
 import 'units.dart';
@@ -26,7 +28,6 @@ enum PosterBackground { tropa, map }
 /// Vertical: for stories and reels. Horizontal: the "pro map" sheet with notes and an elevation profile.
 enum PosterFormat { vertical, horizontal }
 
-enum LineColoring { single, mode, speed, height }
 
 /// What goes onto the poster. Every item is a checkbox or a choice in the poster screen.
 class PosterOptions {
@@ -35,7 +36,7 @@ class PosterOptions {
   PosterFormat format = PosterFormat.vertical;
   PosterBackground background = PosterBackground.tropa;
   bool darkMap = true; // the map is always the dark, toned-down one; the field stays for the code that draws it
-  LineColoring coloring = LineColoring.mode;
+  LineColoring coloring = LineColoring.single;
 
   bool distance = true;
   bool time = true;
@@ -46,11 +47,10 @@ class PosterOptions {
   bool weather = true;
   bool waterTemp = true;
   bool peaks = true; // labels at the fastest point and the highest point
-  bool legend = true; // list of the ways of travelling with distance and pace
+  bool legend = true; // list of the ways of travelling with distance and speed
   bool showRestored = false; // false: restored gaps look like the rest of the route
   bool notes = true; // numbered markers of the notes made during the walk
   bool profile = true; // small elevation profile under the statistics (vertical poster)
-  bool demHeights = true; // refine heights with the terrain model when it has been fetched
 
   /// Pro: no start/finish markers and the first and last [hideEndsMeters] of the line are not drawn.
   bool hideEnds = false;
@@ -125,12 +125,13 @@ Future<Uint8List> composePoster({
     }
   }
   final (i0, i1) = posterShownRange(pts, o.hideEnds);
+  final colorScale = buildLineScale(o, mode, pts, i0, i1, modeAt, speeds, alt);
 
   // --- projection of the track onto the poster
   final proj = useMap ? mapProjection(map) : fitProjection(pts, i0, i1);
   _drawScrims(c, o, useMap);
 
-  drawPosterRoute(c, o, pts, i0, i1, mode, modeAt, speeds, alt, proj, useMap && !o.darkMap);
+  drawPosterRoute(c, o, pts, i0, i1, mode, colorScale, speeds, proj, useMap && !o.darkMap);
 
   // --- text blocks
   final st = computeStats(pts, movingSpeedMs: profileOf(mode).movingSpeedMs);
@@ -142,7 +143,7 @@ Future<Uint8List> composePoster({
   if (o.notes) {
     drawNoteMarkers(c, notes, proj, labels: true, bounds: const Rect.fromLTRB(24, offsetTop, posterW - 24, routeBottom + 40));
   }
-  _drawBottom(c, o, pts, segments, mode, st, alt, altitudeFused, weather, useMap, i0, i1);
+  _drawBottom(c, o, pts, segments, mode, st, alt, altitudeFused, weather, useMap, i0, i1, colorScale);
 
   final pic = rec.endRecording();
   final image = await pic.toImage((posterW * scale).toInt(), (posterH * scale).toInt());
@@ -299,12 +300,12 @@ Projection mapProjection(MapCapture m, [double canvasW = posterW]) {
 
 // ====================================================================== route
 
-void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, int i1, TravelMode mode, List<TravelMode> modeAt,
-    List<double> speeds, List<double> alt, Projection proj, bool lightMap, {double lineScale = 1.0}) {
+void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, int i1, TravelMode mode, LineScale scale,
+    List<double> speeds, Projection proj, bool lightMap, {double lineScale = 1.0}) {
   if (i1 <= i0) return;
   final result = analyzeGaps(pts, settings: AppSettings.instance.healFor(mode));
 
-  final colorAt = posterColorFunction(o, i0, i1, modeAt, speeds, alt);
+  final colorAt = scale.colorAt;
 
   final halo = Paint()
     ..color = lightMap ? const Color(0xCCFFFFFF) : const Color(0x99000000)
@@ -345,8 +346,17 @@ void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, in
     ..strokeCap = StrokeCap.round
     ..strokeJoin = StrokeJoin.round
     ..style = PaintingStyle.stroke;
-  for (final pc in pieces) {
-    if (pc.$2 != null) c.drawPoints(ui.PointMode.polygon, pc.$1, paint..color = pc.$2!);
+  // Vehicle stretches (when the walk also has others) are dashed: the dash pattern runs on across pieces.
+  var dashPhase = 0.0;
+  for (var k = 0; k < pieces.length; k++) {
+    final pc = pieces[k];
+    if (pc.$2 == null) continue;
+    if (scale.vehicleAt[i0 + 1 + k]) {
+      dashPhase = _dashPolyline(c, pc.$1, paint..color = pc.$2!, dashPhase, on: 30.0 * lineScale, off: 20.0 * lineScale);
+    } else {
+      dashPhase = 0;
+      c.drawPoints(ui.PointMode.polygon, pc.$1, paint..color = pc.$2!);
+    }
   }
 
   _drawDirectionArrows(c, sep, lineScale, lightMap);
@@ -361,6 +371,35 @@ void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, in
 void _marker(Canvas c, Offset at, Color color, double outer, double inner) {
   c.drawCircle(at, outer, Paint()..color = const Color(0xFFFFFFFF));
   c.drawCircle(at, inner, Paint()..color = color);
+}
+
+/// Draws [pts] as dashes ([on] drawn, [off] skipped), starting [phase] units into the pattern; returns the phase at the end
+/// so the next piece of the same stretch continues the pattern.
+double _dashPolyline(Canvas c, List<Offset> pts, Paint paint, double phase, {required double on, required double off}) {
+  final period = on + off;
+  var p = phase % period; // position inside the dash pattern, always in [0, period)
+  for (var k = 1; k < pts.length; k++) {
+    final a = pts[k - 1], b = pts[k];
+    final len = (b - a).distance;
+    if (len == 0) continue;
+    final dir = (b - a) / len;
+    var d = 0.0;
+    while (len - d > 1e-9) {
+      final drawing = p < on;
+      final remain = drawing ? on - p : period - p;
+      if (remain < 1e-6) {
+        // On the border of a dash: step over it explicitly (rounding must never leave the loop standing still).
+        p = drawing ? on : 0;
+        continue;
+      }
+      final step = math.min(remain, len - d);
+      if (drawing) c.drawLine(a + dir * d, a + dir * (d + step), paint);
+      d += step;
+      p += step;
+      if (p >= period) p -= period;
+    }
+  }
+  return p;
 }
 
 void _dashed(Canvas c, Offset a, Offset b, Paint paint) {
@@ -432,30 +471,37 @@ void _drawHeader(Canvas c, PosterOptions o, int startMs, int endMs, int offsetSe
   }
 }
 
+/// The colour scale of the poster line for the shown part of the track. A slope colouring on a flat walk
+/// quietly becomes a single colour (the poster screen does not offer it there).
+LineScale buildLineScale(PosterOptions o, TravelMode mode, List<TrackPoint> pts, int i0, int i1, List<TravelMode> modeAt,
+    List<double> speeds, List<double> alt) {
+  var coloring = o.coloring;
+  if (coloring == LineColoring.slope && !slopeAvailable(alt, i0, i1)) coloring = LineColoring.single;
+  if (coloring == LineColoring.height && alt.length <= i1) coloring = LineColoring.single;
+  return LineScale.compute(coloring, mode, pts, i0, i1, modeAt, speeds, alt);
+}
+
 void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> segments, TravelMode mode, TrackStats st,
-    List<double> alt, bool altFused, WeatherInfo? weather, bool useMap, int i0, int i1) {
+    List<double> alt, bool altFused, WeatherInfo? weather, bool useMap, int i0, int i1, LineScale scale) {
   var y = 1160.0;
 
-  // Legend: the ways of travelling with their own distance and pace/speed (pace only on foot).
+  // Colour scale, then the legend: the ways of travelling with their own distance and speed.
+  if (scale.coloring != LineColoring.single) {
+    y += drawColorScale(c, scale, Rect.fromLTWH(64, y + 6, posterW - 128, 18), labelSize: 26) + 14;
+  }
   if (o.legend) {
     final byMode = <TravelMode, ({double d, int t})>{};
     for (final s in segments) {
       final prev = byMode[s.mode];
       byMode[s.mode] = (d: (prev?.d ?? 0) + s.stats.distanceMeters, t: (prev?.t ?? 0) + s.stats.movingSeconds);
     }
-    if (o.coloring == LineColoring.speed || o.coloring == LineColoring.height) {
-      y += _drawScaleBar(c, o, y, pts, alt) + 14;
-    }
     final entries = byMode.entries.where((e) => e.value.d > 50).toList();
-    if (entries.length > 1 || (entries.length == 1 && o.coloring == LineColoring.mode)) {
+    if (entries.length > 1) {
       for (final e in entries.take(3)) {
         final d = e.value.d, secs = e.value.t;
-        c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(64, y + 9, 26, 26), const Radius.circular(13)),
-            Paint()..color = o.coloring == LineColoring.mode ? posterModeColor(e.key) : const Color(0xFF90A4AE));
+        _legendSwatch(c, Offset(64, y + 9), e.key == TravelMode.car);
         final v = secs > 0 ? d / secs : 0.0;
-        final detail = e.key == TravelMode.walk && v > 0
-            ? t('темп {p}', {'p': Units.pace(1000 / v / 60)})
-            : (v > 0 ? Units.speed(v) : '');
+        final detail = v > 0 ? Units.speed(v) : '';
         drawText(c, '${t(e.key.label)} · ${Units.dist(d, digits: 1)}${detail.isEmpty ? '' : ' · $detail'}', Offset(108, y),
             bodyStyle(34, weight: 500), maxWidth: posterW - 172, maxLines: 1);
         y += 50;
@@ -473,11 +519,8 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
     cells.add(('+${Units.height(es.gain)}', t('набор высоты')));
   }
   if (o.speed && st.avgMovingSpeedMs > 0) {
-    final pace = st.paceMinPerKm;
     final single = segments.map((s) => s.mode).toSet().length <= 1;
-    if (single && mode != TravelMode.car && mode != TravelMode.water && mode != TravelMode.bike && pace != null && pace < 60) {
-      cells.add((Units.pace(pace), t('средний темп')));
-    } else if (single) {
+    if (single) {
       cells.add((Units.speed(st.avgMovingSpeedMs), t('средняя скорость')));
     } else if (st.maxSpeedMs > 0) {
       cells.add((Units.speed(st.maxSpeedMs, digits: 0), t('макс. скорость')));
@@ -527,34 +570,65 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
   }
 }
 
-/// Gradient bar explaining the colours of the "speed" and "height" line, full width. Returns its height.
-double _drawScaleBar(Canvas c, PosterOptions o, double y, List<TrackPoint> pts, List<double> alt) {
-  drawColorScale(c, o, pts, alt, Rect.fromLTWH(64, y + 6, posterW - 128, 18), labelSize: 26);
-  return 62;
+/// Legend mark of a way of travelling: a solid bar on foot, dashes for a vehicle (as on the line itself).
+void _legendSwatch(Canvas c, Offset at, bool dashed) {
+  final paint = Paint()..color = const Color(0xFF90A4AE);
+  if (!dashed) {
+    c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(at.dx, at.dy, 26, 26), const Radius.circular(13)), paint);
+    return;
+  }
+  for (var k = 0; k < 2; k++) {
+    c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(at.dx + k * 17, at.dy + 6, 9, 14), const Radius.circular(4)), paint);
+  }
 }
 
-/// Colour scale of the line (speed or height): a gradient bar in [r] with the lowest and highest value
-/// under its ends. The values are the 10th and 90th percentile that the line itself uses.
-void drawColorScale(Canvas c, PosterOptions o, List<TrackPoint> pts, List<double> alt, Rect r, {double labelSize = 24}) {
-  final speed = o.coloring == LineColoring.speed;
-  final stops = speed ? speedStops : heightStops;
+/// Colour scale of the line (speed, height or slope): a gradient bar in [r] with the values under it. The speed values
+/// are the 10th and 90th percentile that the line itself uses; a walk with a vehicle ride has one scale for each, written
+/// under the bar. Returns the height used, from the top of [r] to the bottom of the labels.
+double drawColorScale(Canvas c, LineScale scale, Rect r, {double labelSize = 24}) {
+  final stops = switch (scale.coloring) {
+    LineColoring.speed => speedStops,
+    LineColoring.height => heightStops,
+    _ => slopeStops,
+  };
   c.drawRRect(
     RRect.fromRectAndRadius(r, Radius.circular(r.height / 2)),
     Paint()
       ..shader = ui.Gradient.linear(Offset(r.left, 0), Offset(r.right, 0), stops, [for (var i = 0; i < stops.length; i++) i / (stops.length - 1)]),
   );
-  String lo, hi;
-  if (speed) {
-    final v = [for (final s in smoothedSpeeds(pts)) if (s > 0.5) s]..sort();
-    lo = Units.speed(v.isEmpty ? 0 : v[(v.length * 0.1).floor()], digits: 0);
-    hi = Units.speed(v.isEmpty ? 0 : v[math.min(v.length - 1, (v.length * 0.9).floor())], digits: 0);
-  } else {
-    lo = Units.height(alt.reduce(math.min));
-    hi = Units.height(alt.reduce(math.max));
-  }
   final style = bodyStyle(labelSize, color: const Color(0xFFCFD8DC));
-  drawText(c, lo, Offset(r.left, r.bottom + 4), style);
-  drawText(c, hi, Offset(r.right - textWidth(hi, style), r.bottom + 4), style);
+  final y = r.bottom + 4;
+  String range(double lo, double hi) => '${Units.speedValue(lo).round()}–${Units.speed(hi, digits: 0)}';
+  var lines = 1;
+  switch (scale.coloring) {
+    case LineColoring.speed when scale.split:
+      // Wide bars have room for one line, the narrow plate of the horizontal poster gets two.
+      final walk = '${t('Пешком')} ${range(scale.walkLo, scale.walkHi)}';
+      final vehicle = '${t('Транспорт')} ${range(scale.vehicleLo, scale.vehicleHi)}';
+      if (r.width > 700) {
+        drawText(c, '$walk   ·   $vehicle', Offset(r.left, y), style);
+      } else {
+        drawText(c, walk, Offset(r.left, y), style);
+        drawText(c, vehicle, Offset(r.left, y + labelSize * 1.3), style);
+        lines = 2;
+      }
+    case LineColoring.speed:
+      final lo = Units.speed(scale.walkLo, digits: 0), hi = Units.speed(scale.walkHi, digits: 0);
+      drawText(c, lo, Offset(r.left, y), style);
+      drawText(c, hi, Offset(r.right - textWidth(hi, style), y), style);
+    case LineColoring.height:
+      final lo = Units.height(scale.heightLo), hi = Units.height(scale.heightHi);
+      drawText(c, lo, Offset(r.left, y), style);
+      drawText(c, hi, Offset(r.right - textWidth(hi, style), y), style);
+    default:
+      final limit = scale.slopeLimit.round();
+      final mid = '0 %';
+      drawText(c, '−$limit %', Offset(r.left, y), style);
+      drawText(c, mid, Offset(r.center.dx - textWidth(mid, style) / 2, y), style);
+      final up = '+$limit %';
+      drawText(c, up, Offset(r.right - textWidth(up, style), y), style);
+  }
+  return r.height + 10 + labelSize * 1.3 * lines;
 }
 
 Future<File> writePoster(Uint8List png, String name) async {
@@ -609,29 +683,6 @@ void drawNoteMarkers(Canvas c, List<TrackNote> notes, Projection proj,
       break;
     }
   }
-}
-
-/// Colour of the line at point [i] for the chosen colouring. The "speed" and "height" scales run from the
-/// 10th to the 90th percentile of the shown part, so one outlier cannot flatten the whole gradient.
-Color Function(int) posterColorFunction(
-    PosterOptions o, int i0, int i1, List<TravelMode> modeAt, List<double> speeds, List<double> alt) {
-  final moving = [for (var i = i0; i <= i1; i++) if (speeds[i] > 0.5) speeds[i]]..sort();
-  final vLo = moving.isEmpty ? 0.0 : moving[(moving.length * 0.1).floor()];
-  final vHi = moving.isEmpty ? 1.0 : moving[math.min(moving.length - 1, (moving.length * 0.9).floor())];
-  final aLo = alt.isEmpty ? 0.0 : alt.sublist(i0, i1 + 1).reduce(math.min);
-  final aHi = alt.isEmpty ? 1.0 : alt.sublist(i0, i1 + 1).reduce(math.max);
-  return (int i) {
-    switch (o.coloring) {
-      case LineColoring.single:
-        return brandAccent;
-      case LineColoring.mode:
-        return posterModeColor(modeAt[i]);
-      case LineColoring.speed:
-        return gradientColor(speedStops, vHi > vLo ? (speeds[i] - vLo) / (vHi - vLo) : 0.5);
-      case LineColoring.height:
-        return gradientColor(heightStops, aHi - aLo > 5 ? (alt[i] - aLo) / (aHi - aLo) : 0.5);
-    }
-  };
 }
 
 /// Positions of the shown points after pulling apart the places where the track overlaps itself, the

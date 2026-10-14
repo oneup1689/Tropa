@@ -58,6 +58,7 @@ Future<Uint8List> composeWidePoster({
     }
   }
   final (i0, i1) = posterShownRange(pts, o.hideEnds);
+  final colorScale = buildLineScale(o, mode, pts, i0, i1, modeAt, speeds, alt);
   final st = computeStats(pts, movingSpeedMs: profileOf(mode).movingSpeedMs);
 
   // --- the map frame
@@ -75,17 +76,22 @@ Future<Uint8List> composeWidePoster({
     _contours(c, wideMapRect);
   }
   final proj = useMap ? mapProjection(map, wideW) : fitProjection(pts, i0, i1, wideRouteArea);
-  drawPosterRoute(c, o, pts, i0, i1, mode, modeAt, speeds, alt, proj, useMap && !o.darkMap, lineScale: 0.72);
+  drawPosterRoute(c, o, pts, i0, i1, mode, colorScale, speeds, proj, useMap && !o.darkMap, lineScale: 0.72);
   drawPosterPeaks(c, o, pts, i0, i1, speeds, alt, proj, st.maxSpeedMs * 3.6, bounds: wideMapRect.deflate(14));
   if (o.notes) drawNoteMarkers(c, notes, proj, labels: false, bounds: wideMapRect.deflate(14), scale: 0.9);
   drawDistanceScale(c, proj, pts[pts.length ~/ 2], Offset(wideMapRect.left + 36, wideMapRect.bottom - 36), light: useMap && !o.darkMap, maxLen: 190);
-  if (o.coloring == LineColoring.speed || o.coloring == LineColoring.height) {
+  if (colorScale.coloring != LineColoring.single) {
     // The colour scale sits on a dark plate in the corner of the map, so it reads on any map.
-    const plate = Rect.fromLTWH(1736 - 366, 64 + 716 - 112, 330, 84);
+    final extra = colorScale.coloring == LineColoring.speed && colorScale.split ? 26.0 : 0.0;
+    final plate = Rect.fromLTWH(1736 - 366, 64 + 716 - 112 - extra, 330, 84 + extra);
     c.drawRRect(RRect.fromRectAndRadius(plate, const Radius.circular(16)), Paint()..color = const Color(0xB3000000));
-    drawText(c, o.coloring == LineColoring.speed ? t('СКОРОСТЬ') : t('ВЫСОТА'), Offset(plate.left + 16, plate.top + 8),
-        headingStyle(14, weight: 600, color: _gold));
-    drawColorScale(c, o, pts, alt, Rect.fromLTWH(plate.left + 16, plate.top + 34, plate.width - 32, 12), labelSize: 20);
+    final heading = switch (colorScale.coloring) {
+      LineColoring.speed => t('СКОРОСТЬ'),
+      LineColoring.height => t('ВЫСОТА'),
+      _ => t('УКЛОН'),
+    };
+    drawText(c, heading, Offset(plate.left + 16, plate.top + 8), headingStyle(14, weight: 600, color: _gold));
+    drawColorScale(c, colorScale, Rect.fromLTWH(plate.left + 16, plate.top + 34, plate.width - 32, 12), labelSize: 20);
   }
   if (useMap) {
     const note = '© OpenStreetMap · Protomaps';
@@ -96,7 +102,7 @@ Future<Uint8List> composeWidePoster({
   _frame(c, wideMapRect);
 
   // --- the elevation profile
-  _chart(c, o, pts, i0, i1, alt, modeAt, speeds, notes);
+  _chart(c, o, pts, i0, i1, alt, modeAt, speeds, notes, colorScale);
 
   // --- the left panel
   _panel(c, o, pts, segments, mode, st, alt, altitudeFused, weather, notes);
@@ -171,7 +177,7 @@ void _corners(Canvas c) {
 // ====================================================================== elevation profile
 
 void _chart(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, int i1, List<double> alt, List<TravelMode> modeAt,
-    List<double> speeds, List<TrackNote> notes) {
+    List<double> speeds, List<TrackNote> notes, LineScale scale) {
   final box = RRect.fromRectAndRadius(wideChartRect, const Radius.circular(24));
   c.drawRRect(box, Paint()..color = const Color(0x22000000));
   _frame(c, wideChartRect);
@@ -242,7 +248,7 @@ void _chart(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, int i1, Lis
   );
 
   // The profile line, coloured like the route.
-  final colorAt = posterColorFunction(o, i0, i1, modeAt, speeds, alt);
+  final colorAt = scale.colorAt;
   final line = Paint()
     ..strokeWidth = 5
     ..strokeCap = StrokeCap.round
@@ -345,11 +351,8 @@ void _panel(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> 
   if (o.time) cells.add((_hms(st.movingSeconds), t('в движении')));
   cells.add(('+${Units.height((altFused ? elevationOfFused(alt) : elevationOf(pts, alt)).gain)}', t('набор высоты')));
   if (o.speed && st.avgMovingSpeedMs > 0) {
-    final pace = st.paceMinPerKm;
     final single = segments.map((s) => s.mode).toSet().length <= 1;
-    if (single && mode == TravelMode.walk && pace != null && pace < 60) {
-      cells.add((Units.pace(pace), t('средний темп')));
-    } else if (single) {
+    if (single) {
       cells.add((Units.speed(st.avgMovingSpeedMs), t('средняя скорость')));
     } else if (st.maxSpeedMs > 0) {
       cells.add((Units.speed(st.maxSpeedMs, digits: 0), t('макс. скорость')));
@@ -377,11 +380,16 @@ void _panel(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> 
       byMode[s.mode] = (d: (prev?.d ?? 0) + s.stats.distanceMeters, t: (prev?.t ?? 0) + s.stats.movingSeconds);
     }
     for (final e in byMode.entries.where((e) => e.value.d > 50).take(3)) {
-      c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x + 2, y + 7, 20, 20), const Radius.circular(10)), Paint()..color = o.coloring == LineColoring.mode ? posterModeColor(e.key) : const Color(0xFF90A4AE));
+      final swatch = Paint()..color = const Color(0xFF90A4AE);
+      if (e.key == TravelMode.car) {
+        for (var k = 0; k < 2; k++) {
+          c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x + 2 + k * 13, y + 11, 7, 12), const Radius.circular(3)), swatch);
+        }
+      } else {
+        c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x + 2, y + 7, 20, 20), const Radius.circular(10)), swatch);
+      }
       final v = e.value.t > 0 ? e.value.d / e.value.t : 0.0;
-      final detail = e.key == TravelMode.walk && v > 0
-          ? ' · ${Units.pace(1000 / v / 60)}'
-          : (v > 0 ? ' · ${Units.speed(v)}' : '');
+      final detail = v > 0 ? ' · ${Units.speed(v)}' : '';
       drawText(c, '${t(e.key.label)} · ${Units.dist(e.value.d, digits: 1)}$detail', Offset(x + 34, y), bodyStyle(24, weight: 500),
           maxWidth: w - 34, maxLines: 1);
       y += 36;

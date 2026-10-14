@@ -2,36 +2,28 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:share_plus/share_plus.dart';
 
+import 'app_hooks.dart';
 import 'app_shell.dart';
-import 'backup.dart';
 import 'brand.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'geoid.dart';
-import 'gpx.dart';
 import 'l10n.dart';
 import 'map_page.dart';
-import 'maps_page.dart';
 import 'modes.dart';
-import 'multi_poster_page.dart';
 import 'notes.dart';
 import 'planner_page.dart';
-import 'poster_page.dart';
 import 'readiness.dart';
 import 'recorder.dart';
 import 'route_view.dart';
-import 'routes_page.dart';
 import 'settings.dart';
-import 'settings_page.dart';
 import 'stats.dart';
 import 'theme.dart';
 import 'units.dart';
@@ -140,11 +132,16 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       // Keep the list (point counts, the new walk) fresh while a recording is running.
       if (++tick % 5 == 0) _reload();
     });
+    AppHooks.startAlongRoute = startAlongRoute;
+    AppHooks.reloadWalks = _reload;
     _reload();
   }
 
   @override
   void dispose() {
+    // A newer instance (the tree was rebuilt after the splash) may have registered already: only remove our own entries.
+    if (AppHooks.startAlongRoute == startAlongRoute) AppHooks.startAlongRoute = null;
+    if (AppHooks.reloadWalks == _reload) AppHooks.reloadWalks = null;
     _ticker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     rec.removeListener(_onChange);
@@ -301,83 +298,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
   }
 
-  /// Export dialog: the user chooses what goes into the GPX file.
-  Future<void> _exportGpx(int id) async {
-    var heal = AppSettings.instance.healEnabled, withTime = true, withEle = true;
-    // Trimming is a Pro option, but a value set earlier keeps working in amateur mode.
-    var trimStart = AppSettings.instance.trimStartM, trimEnd = AppSettings.instance.trimEndM;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => StatefulBuilder(
-        builder: (c, setS) => AlertDialog(
-          title: Text(t('Что включить в маршрут (GPX)')),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              CheckboxListTile(
-                value: heal,
-                onChanged: (v) => setS(() => heal = v ?? heal),
-                title: Text(t('Склеить короткие разрывы')),
-                subtitle: Text(t('Только короткие участки, где движение было правдоподобным')),
-              ),
-              CheckboxListTile(
-                value: withTime,
-                onChanged: (v) => setS(() => withTime = v ?? withTime),
-                title: Text(t('Время')),
-              ),
-              CheckboxListTile(
-                value: withEle,
-                onChanged: (v) => setS(() => withEle = v ?? withEle),
-                title: Text(t('Высота')),
-              ),
-              if (AppSettings.instance.pro) ...[
-                Divider(),
-                Text(t('Обрезать начало: {n}', {'n': Units.shortDist(trimStart)})),
-                Slider(
-                  value: trimStart,
-                  max: 500,
-                  divisions: 20,
-                  onChanged: (v) => setS(() => trimStart = v),
-                ),
-                Text(t('Обрезать конец: {n}', {'n': Units.shortDist(trimEnd)})),
-                Slider(
-                  value: trimEnd,
-                  max: 500,
-                  divisions: 20,
-                  onChanged: (v) => setS(() => trimEnd = v),
-                ),
-              ],
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
-            TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Поделиться'))),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    final f = await writeGpx(
-      id,
-      withTime: withTime,
-      withElevation: withEle,
-      heal: heal,
-      trimStartM: trimStart,
-      trimEndM: trimEnd,
-    );
-    await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: t('Tropa — маршрут')));
-  }
-
   Future<void> _newNote() async {
     final saved = await showNoteSheet(context);
     if (saved) _snack(t('Заметка сохранена'));
-  }
-
-  /// Opens the imported routes; if the user picks "go along this route", the recording starts with
-  /// off-route warnings.
-  Future<void> _openRoutes() async {
-    final routeId = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => RoutesPage()));
-    if (routeId == null || !mounted) return;
-    await startAlongRoute(routeId);
   }
 
   /// Starts a recording along an imported route (also called from the Routes tab).
@@ -390,79 +313,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final ok = await rec.start(routeId: routeId);
     _snack(ok ? t('Запись идёт по выбранному маршруту') : t('Не удалось начать запись'));
     await _reload();
-  }
-
-  Future<void> _backup() async {
-    _snack(t('Готовлю резервную копию…'));
-    try {
-      final r = await exportBackup();
-      await SharePlus.instance.share(ShareParams(files: [XFile(r.file.path)], text: t('Tropa — резервная копия')));
-      _snack(t('Копия: прогулок {n}, точек {p}', {'n': r.sessions, 'p': r.points}));
-    } catch (e) {
-      DebugLog.instance.log('BACKUP', 'export failed: $e');
-      _snack(t('Не удалось создать копию: {e}', {'e': e}));
-    }
-  }
-
-  Future<void> _restore() async {
-    final picked = await FilePicker.pickFiles(type: FileType.any);
-    final path = picked.firstOrNull?.path;
-    if (path == null) return;
-    try {
-      final r = await importBackup(File(path));
-      _snack(t('Восстановлено прогулок: {n}, пропущено повторов: {s}, заметок: {m}, маршрутов: {r}',
-          {'n': r.sessions, 's': r.skipped, 'm': r.notes, 'r': r.routes}));
-      await _reload();
-    } catch (e) {
-      DebugLog.instance.log('BACKUP', 'import failed: $e');
-      _snack(t('Не удалось восстановить: {e}', {'e': e}));
-    }
-  }
-
-  /// Quick notes for the test walk: what the user did with the phone and when.
-  Future<void> _addMark() async {
-    final presets = [
-      t('Режим самолёта ВКЛ'),
-      t('Режим самолёта ВЫКЛ'),
-      t('Экономия батареи ВКЛ'),
-      t('Экономия батареи ВЫКЛ'),
-      t('GPS ВКЛ'),
-      t('GPS ВЫКЛ'),
-      t('Экран погашен'),
-      t('Экран включён'),
-      t('Телефон в кармане'),
-    ];
-    final ctl = TextEditingController();
-    final note = await showDialog<String>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(t('Метка в лог')),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Wrap(spacing: 6, children: [
-              for (final p in presets) ActionChip(label: Text(t(p)), onPressed: () => Navigator.pop(c, p)),
-            ]),
-            SizedBox(height: 8),
-            TextField(controller: ctl, decoration: InputDecoration(hintText: t('Своя заметка'))),
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: Text(t('Отмена'))),
-          TextButton(onPressed: () => Navigator.pop(c, ctl.text.trim()), child: Text(t('Записать'))),
-        ],
-      ),
-    );
-    if (note != null && note.isNotEmpty) {
-      rec.mark(note);
-      _snack(t('Метка записана'));
-    }
-  }
-
-  Future<void> _shareLog() async {
-    final path = DebugLog.instance.path;
-    if (path == null) return;
-    DebugLog.instance.log('LOG', 'shared by user');
-    await SharePlus.instance.share(ShareParams(files: [XFile(path)], text: 'Tropa debug log'));
   }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
@@ -512,7 +362,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           SizedBox(width: 10),
           Text('Tropa', style: TextStyle(fontFamily: headingFont, fontSize: 22, fontVariations: [FontVariation('wght', 700)])),
         ]),
-        actions: [_menu(context)],
       ),
       body: ListView(
         padding: EdgeInsets.fromLTRB(16, 4, 16, 32),
@@ -521,7 +370,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _recordCard(context),
           SizedBox(height: 22),
           Row(children: [
-            Text(t('Прогулки'), style: Theme.of(context).textTheme.titleLarge),
+            Text(t('История'), style: Theme.of(context).textTheme.titleLarge),
             SizedBox(width: 8),
             if (sessions.isNotEmpty)
               Container(
@@ -535,56 +384,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           for (final s in sessions) _sessionCard(context, s),
         ],
       ),
-    );
-  }
-
-  Widget _menu(BuildContext context) {
-    final pro = AppSettings.instance.pro;
-    PopupMenuItem<String> item(String value, IconData icon, String label) => PopupMenuItem(
-          value: value,
-          child: Row(children: [Icon(icon, size: 20), SizedBox(width: 12), Flexible(child: Text(label))]),
-        );
-    return PopupMenuButton<String>(
-      onSelected: (v) async {
-        final nav = Navigator.of(context);
-        switch (v) {
-          case 'settings':
-            await nav.push(MaterialPageRoute(builder: (_) => SettingsPage()));
-          case 'maps':
-            await nav.push(MaterialPageRoute(builder: (_) => MapsPage()));
-          case 'routes':
-            await _openRoutes();
-          case 'multi':
-            await nav.push(MaterialPageRoute(builder: (_) => const MultiPosterPage()));
-          case 'planner':
-            await nav.push(MaterialPageRoute(builder: (_) => const PlannerPage()));
-          case 'backup':
-            await _backup();
-          case 'restore':
-            await _restore();
-          case 'mark':
-            await _addMark();
-          case 'log':
-            await _shareLog();
-          case 'clear':
-            await DebugLog.instance.clear();
-            _snack(t('Лог очищен'));
-        }
-      },
-      itemBuilder: (_) => [
-        item('settings', Icons.tune, t('Настройки')),
-        item('maps', Icons.download_for_offline_outlined, t('Карты')),
-        item('routes', Icons.alt_route, t('Маршруты (импорт GPX)')),
-        item('planner', Icons.event_available_outlined, t('Планировщик')),
-        if (pro) item('multi', Icons.collections_outlined, t('Постер из нескольких прогулок')),
-        const PopupMenuDivider(),
-        item('backup', Icons.backup_outlined, t('Резервная копия')),
-        item('restore', Icons.restore, t('Восстановить из копии')),
-        const PopupMenuDivider(),
-        if (pro) item('mark', Icons.bookmark_add_outlined, t('Добавить метку в лог')),
-        item('log', Icons.bug_report_outlined, t('Отправить лог отладки')),
-        if (pro) item('clear', Icons.delete_sweep_outlined, t('Очистить лог')),
-      ],
     );
   }
 
@@ -682,7 +481,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 if (recording)
                   Text(_fmt(elapsed),
                       style: const TextStyle(
-                          fontFamily: headingFont, fontSize: 26, color: Colors.white, fontVariations: [FontVariation('wght', 700)])),
+                          fontFamily: headingFont, fontSize: 26, color: Colors.white, fontVariations: [FontVariation('wght', 700)]))
+                else if (Platform.isAndroid)
+                  _plannerButton(),
               ]),
               const SizedBox(height: 16),
               _modeRow(recording),
@@ -825,6 +626,20 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // ------------------------------------------------------------------ distance goal
 
   /// A round flag button next to the record button: opens the goal sheet; shows the goal once it is set.
+  /// Schedule a future walk (a reminder or an automatic start), in the corner of the start card.
+  Widget _plannerButton() => Tooltip(
+        message: t('Планировщик'),
+        child: GestureDetector(
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PlannerPage())),
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: const BoxDecoration(color: Color(0x26FFFFFF), shape: BoxShape.circle),
+            child: const Icon(Icons.event_available_outlined, size: 21, color: Colors.white),
+          ),
+        ),
+      );
+
   Widget _goalButton() {
     final goal = rec.activeGoalM;
     final set = goal > 0;
@@ -957,10 +772,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => RouteViewPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
-        ),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => RouteViewPage(sessionId: s.id, title: s.title.isEmpty ? _dateFull(s.startMs) : s.title, mode: mode)),
+          );
+          // The walk may have been renamed, changed or deleted on its own screen.
+          if (mounted) await _reload();
+        },
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: FutureBuilder<_Summary>(
@@ -975,7 +794,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_date(s.startMs), style: Theme.of(context).textTheme.titleMedium),
+                    Text(s.title.isEmpty ? _date(s.startMs) : s.title,
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleMedium),
+                    if (s.title.isNotEmpty)
+                      Text(_date(s.startMs),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
                     const SizedBox(height: 5),
                     Row(children: [
                       Icon(modeIcon(mode), size: 16, color: cs.primary),
@@ -1005,58 +828,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ]),
                   ]),
                 ),
-                _sessionMenu(context, s, mode),
+                Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
               ]);
             },
           ),
         ),
       ),
-    );
-  }
-
-  Widget _sessionMenu(BuildContext context, SessionInfo s, TravelMode mode) {
-    PopupMenuItem<String> item(String value, IconData icon, String label) => PopupMenuItem(
-          value: value,
-          child: Row(children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)]),
-        );
-    return PopupMenuButton<String>(
-      onSelected: (v) async {
-        if (v == 'map') {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => MapPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
-          );
-        } else if (v == 'image') {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => PosterPage(sessionId: s.id, title: _dateFull(s.startMs), mode: mode)),
-          );
-        } else if (v == 'gpx') {
-          await _exportGpx(s.id);
-        } else if (v == 'delete' && s.status != 'active') {
-          final ok = await showDialog<bool>(
-            context: context,
-            builder: (c) => AlertDialog(
-              title: Text(t('Удалить прогулку?')),
-              content: Text(t('Точки, заметки и участки этой прогулки будут удалены. Фото и видео в галерее останутся.')),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
-                TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Удалить'))),
-              ],
-            ),
-          );
-          if (ok == true) {
-            await TrackDb.instance.deleteSession(s.id);
-            await _reload();
-          }
-        }
-      },
-      itemBuilder: (_) => [
-        item('map', Icons.map_outlined, t('На карте')),
-        item('image', Icons.image_outlined, t('Постер')),
-        item('gpx', Icons.ios_share, t('Маршрут (GPX)')),
-        item('delete', Icons.delete_outline, t('Удалить')),
-      ],
     );
   }
 }
@@ -1127,72 +904,83 @@ class _GoalSheet extends StatefulWidget {
   State<_GoalSheet> createState() => _GoalSheetState();
 }
 
+/// The goal card: optional, one short explanation, a whole number of kilometres (miles) from 1 up, and "out and back".
 class _GoalSheetState extends State<_GoalSheet> {
-  late final List<double> presets = Units.imperial ? const [2.0, 3.0, 5.0, 10.0] : const [3.0, 5.0, 10.0, 15.0];
+  static const int minGoal = 1;
+  static const int maxGoal = 100;
+  static const int sliderMax = 30; // the slider covers the usual walks, the plus button goes on to [maxGoal]
+
+  late final List<int> presets = Units.imperial ? const [2, 3, 5, 10] : const [3, 5, 10, 15];
   late final double toMeters = Units.imperial ? 1609.344 : 1000.0;
-  late final TextEditingController custom = TextEditingController();
-  late double value = widget.currentMeters / toMeters;
+  late int value = widget.currentMeters > 0 ? (widget.currentMeters / toMeters).round().clamp(minGoal, maxGoal) : 5;
   late bool round = widget.currentRound;
 
-  @override
-  void initState() {
-    super.initState();
-    if (value > 0 && !presets.contains(value)) {
-      custom.text = value == value.roundToDouble() ? value.round().toString() : value.toStringAsFixed(1);
-    }
-  }
-
-  @override
-  void dispose() {
-    custom.dispose();
-    super.dispose();
-  }
+  void _set(int v) => setState(() => value = v.clamp(minGoal, maxGoal));
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
     final unit = Units.kmUnit;
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(t('Цель на прогулку'), style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 4),
-        Text(t('Положите телефон в карман: когда цель будет выполнена, придёт уведомление. Запись не остановится.'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
-        const SizedBox(height: 14),
+        Row(children: [
+          Expanded(child: Text(t('Цель на прогулку'), style: text.titleLarge)),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(20)),
+            child: Text(t('необязательно'), style: text.labelSmall?.copyWith(color: cs.onSurfaceVariant)),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        Text(t('Пройдёте это расстояние — придёт уведомление. Запись продолжится.'),
+            style: text.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+        const SizedBox(height: 12),
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          IconButton.filledTonal(
+            tooltip: t('Меньше'),
+            onPressed: value > minGoal ? () => _set(value - 1) : null,
+            icon: const Icon(Icons.remove),
+          ),
+          SizedBox(
+            width: 140,
+            child: Text('$value $unit', textAlign: TextAlign.center, style: text.headlineMedium),
+          ),
+          IconButton.filledTonal(
+            tooltip: t('Больше'),
+            onPressed: value < maxGoal ? () => _set(value + 1) : null,
+            icon: const Icon(Icons.add),
+          ),
+        ]),
+        Slider(
+          min: minGoal.toDouble(),
+          max: sliderMax.toDouble(),
+          divisions: sliderMax - minGoal,
+          value: value.clamp(minGoal, sliderMax).toDouble(),
+          onChanged: (v) => _set(v.round()),
+        ),
         Wrap(spacing: 8, runSpacing: 8, children: [
           for (final p in presets)
-            ChoiceChip(
-              label: Text('${p.round()} $unit'),
-              selected: value == p,
-              onSelected: (_) => setState(() {
-                value = p;
-                custom.clear();
-              }),
-            ),
+            ChoiceChip(label: Text('$p $unit'), selected: value == p, onSelected: (_) => _set(p)),
         ]),
-        const SizedBox(height: 12),
-        TextField(
-          controller: custom,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(labelText: t('Своё значение'), suffixText: unit),
-          onChanged: (v) => setState(() => value = double.tryParse(v.replaceAll(',', '.')) ?? 0),
-        ),
         const SizedBox(height: 4),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(t('Туда и обратно')),
-          subtitle: Text(t('Уведомим на половине пути: пора разворачиваться. Цель считается по общей дистанции.')),
+          subtitle: Text(t('На половине пути подскажем, что пора разворачиваться')),
           value: round,
           onChanged: (v) => setState(() => round = v),
         ),
         const SizedBox(height: 8),
         Row(children: [
-          if (widget.currentMeters > 0)
-            TextButton(onPressed: () => Navigator.pop(context, (meters: 0.0, round: false)), child: Text(t('Убрать цель'))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, (meters: 0.0, round: false)),
+            child: Text(widget.currentMeters > 0 ? t('Убрать цель') : t('Без цели')),
+          ),
           const Spacer(),
           FilledButton(
-            onPressed: value > 0 && value <= 1000 ? () => Navigator.pop(context, (meters: value * toMeters, round: round)) : null,
+            onPressed: () => Navigator.pop(context, (meters: value * toMeters, round: round)),
             child: Text(t('Готово')),
           ),
         ]),

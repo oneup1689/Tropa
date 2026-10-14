@@ -42,14 +42,37 @@ object TrackingDb {
         if (!has) db.execSQL("ALTER TABLE $table ADD COLUMN $column $type")
     }
 
+    /** The log is one file: when it passes 4 MB the oldest lines are cut off (the newest ~3 MB stay). */
+    private const val MAX_LOG_BYTES = 4L * 1024 * 1024
+    private const val KEEP_LOG_BYTES = 3L * 1024 * 1024
+
+    @Synchronized
     fun log(context: Context, tag: String, message: String) {
         try {
             val dir = File(context.applicationInfo.dataDir, "app_flutter")
             dir.mkdirs()
             val ts = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).format(Date())
-            File(dir, "tropa_debug_log.txt").appendText("$ts [$tag] $message\n")
+            val file = File(dir, "tropa_debug_log.txt")
+            if (file.length() > MAX_LOG_BYTES) trimLog(file)
+            file.appendText("$ts [$tag] $message\n")
         } catch (_: Exception) {
             // logging must never break recording
+        }
+    }
+
+    private fun trimLog(file: File) {
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            val start = (raf.length() - KEEP_LOG_BYTES).coerceAtLeast(0)
+            raf.seek(start)
+            val tail = ByteArray((raf.length() - start).toInt())
+            raf.readFully(tail)
+            val cut = tail.indexOf('\n'.code.toByte()) + 1 // start on a whole line
+            val tmp = File(file.parentFile, "tropa_debug_log.tmp")
+            tmp.writeBytes(tail.copyOfRange(cut, tail.size))
+            if (!tmp.renameTo(file)) {
+                file.writeBytes(tail.copyOfRange(cut, tail.size))
+                tmp.delete()
+            }
         }
     }
 }

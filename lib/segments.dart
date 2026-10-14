@@ -39,14 +39,14 @@ TrackStats _statsOf(List<TrackPoint> pts, int a, int b, TravelMode m) =>
 
 enum _Label { still, walk, fast }
 
-/// Splits a walk into stretches by how fast the person moved. Only "mixed" sessions are split by
-/// speed: a mode chosen before the start (walk, bike, vehicle, water) is the user's own decision and
-/// is kept for the whole walk. A bike cannot be told from a scooter by speed alone, so the fast
-/// class is always "vehicle"; the user can change any stretch by hand ([overrides]).
+/// Splits a walk into stretches by how fast the person moved. "Mixed" and "walk" sessions are split by
+/// speed (a walker who gets into a taxi is no longer "on foot"); bike, vehicle and water are the user's
+/// own decision and kept for the whole walk. A bike cannot be told from a scooter by speed alone, so
+/// the fast class is always "vehicle"; the user can change any stretch by hand ([overrides]).
 List<TrackSegment> buildSegments(List<TrackPoint> pts, TravelMode sessionMode, {List<SegmentOverride> overrides = const []}) {
   if (pts.length < 2) return const [];
   final raw = <(int, int, TravelMode)>[];
-  if (sessionMode != TravelMode.mixed) {
+  if (sessionMode != TravelMode.mixed && sessionMode != TravelMode.walk) {
     raw.add((0, pts.length - 1, sessionMode));
   } else {
     raw.addAll(_autoSplit(pts));

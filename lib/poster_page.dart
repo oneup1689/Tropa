@@ -18,7 +18,9 @@ import 'units.dart';
 import 'maps.dart';
 import 'pmtiles_extract.dart';
 import 'modes.dart';
+import 'multi_poster_page.dart';
 import 'poster.dart';
+import 'poster_progress.dart';
 import 'poster_wide.dart';
 import 'segments.dart';
 import 'settings.dart';
@@ -56,6 +58,19 @@ class _PosterPageState extends State<PosterPage> {
   Uint8List? _png;
 
   bool get _pro => AppSettings.instance.pro;
+
+  /// Is the relief big enough for the slope colouring (a flat walk would only show noise)?
+  bool get _slopeOk => slopeAvailable(_altitude ?? fusedAltitude(_pts), 0, _pts.length - 1);
+
+  /// A walk with a vehicle ride and walking stretches: the vehicle part is dashed.
+  bool get _hasVehicle => _segments.any((s) => s.mode == TravelMode.car) && _segments.any((s) => s.mode != TravelMode.car);
+
+  String _coloringHint() => switch (o.coloring) {
+        LineColoring.single => t('Линия одного цвета'),
+        LineColoring.speed => t('Цвет показывает скорость: синий медленнее, красный быстрее'),
+        LineColoring.height => t('Цвет показывает высоту над уровнем моря'),
+        LineColoring.slope => t('Тёплый — подъём, холодный — спуск'),
+      };
   bool get _hasWater => widget.mode == TravelMode.water || _segments.any((s) => s.mode == TravelMode.water);
 
   @override
@@ -135,7 +150,7 @@ class _PosterPageState extends State<PosterPage> {
       t('Уточнены по карте высот ({s}); на отвесных скалах точность ниже', {'s': d.source == 'srtm30' ? t('SRTM 30 м') : d.source});
 
   /// Height profile for the poster: GPS, refined by the terrain model when the person wants it and it is there.
-  List<double>? get _altitude => _dem != null && o.demHeights ? fuseWithDem(fusedAltitude(_pts), _dem!) : null;
+  List<double>? get _altitude => _dem != null ? fuseWithDem(fusedAltitude(_pts), _dem!) : null;
 
   Future<void> _refreshDem({bool quiet = false}) async {
     if (_pts.length < 2) return;
@@ -299,6 +314,7 @@ class _PosterPageState extends State<PosterPage> {
           _snack(t('Карты для этого места нет: постер сделан в стиле Tropa. Карты добавляются в разделе «Карты».'));
         }
       }
+      final started = DateTime.now(); // the drawing of the route is shown for one full pass after the map step
       final png = o.format == PosterFormat.horizontal
           ? await composeWidePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
@@ -306,6 +322,9 @@ class _PosterPageState extends State<PosterPage> {
           : await composePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
               altitude: _altitude, altitudeFused: _altitude != null);
+      // A quick poster still gets one full drawing of the route on screen.
+      final left = const Duration(milliseconds: 2600) - DateTime.now().difference(started);
+      if (left > Duration.zero) await Future<void>.delayed(left);
       if (!mounted) return;
       setState(() => _png = png);
     } catch (e, st) {
@@ -340,16 +359,40 @@ class _PosterPageState extends State<PosterPage> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    return Scaffold(
+    final screen = Scaffold(
       appBar: AppBar(title: Text(t('Постер'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
+              if (_pro) ...[
+                // The poster of several walks is a variant of this screen, not a separate menu item.
+                SegmentedButton<bool>(
+                  segments: [
+                    ButtonSegment(value: false, label: Text(t('Эта прогулка')), icon: const Icon(Icons.route)),
+                    ButtonSegment(value: true, label: Text(t('Несколько прогулок')), icon: const Icon(Icons.collections_outlined)),
+                  ],
+                  selected: const {false},
+                  onSelectionChanged: (v) {
+                    if (v.first) {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MultiPosterPage()));
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
               if (_png != null) ...[
                 Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 520),
-                    child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(_png!)),
+                    // The new poster appears gently once the drawing of the route fades out.
+                    child: TweenAnimationBuilder<double>(
+                      key: ObjectKey(_png),
+                      tween: Tween(begin: 0, end: 1),
+                      duration: const Duration(milliseconds: 700),
+                      curve: Curves.easeOutCubic,
+                      builder: (_, v, child) => Opacity(opacity: v, child: Transform.scale(scale: 0.94 + 0.06 * v, child: child)),
+                      child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(_png!)),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -407,31 +450,44 @@ class _PosterPageState extends State<PosterPage> {
                 onSelectionChanged: (v) => setState(() => o.background = v.first),
               ),
               if (!_hasMap) _fragmentCard(text),
-              if (_pro) ...[
-                SizedBox(height: 12),
-                Text(t('Окраска линии'), style: text.titleSmall),
-                SizedBox(height: 8),
-                Wrap(spacing: 8, children: [
-                  for (final (v, label) in [
-                    (LineColoring.single, t('Один цвет')),
-                    (LineColoring.mode, t('По режиму')),
-                    (LineColoring.speed, t('По скорости')),
-                    (LineColoring.height, t('По высоте')),
-                  ])
-                    ChoiceChip(label: Text(label), selected: o.coloring == v, onSelected: (_) => setState(() => o.coloring = v)),
-                ]),
-              ],
+              const SizedBox(height: 16),
+              Text(t('Окраска линии'), style: text.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, children: [
+                for (final (v, label) in [
+                  (LineColoring.single, t('Один цвет')),
+                  (LineColoring.speed, t('Скорость')),
+                  (LineColoring.height, t('Высота')),
+                  (LineColoring.slope, t('Уклон')),
+                ])
+                  ChoiceChip(
+                    label: Text(label),
+                    selected: o.coloring == v,
+                    onSelected: v == LineColoring.slope && !_slopeOk ? null : (_) => setState(() => o.coloring = v),
+                  ),
+              ]),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  _slopeOk ? _coloringHint() : t('Маршрут ровный'),
+                  style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              ),
+              if (_hasVehicle)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(t('Участки на транспорте рисуются пунктиром'),
+                      style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                ),
               const SizedBox(height: 12),
               Text(t('Что показать'), style: text.titleSmall),
               _check(t('Дистанция'), o.distance, (v) => o.distance = v),
               _check(t('Время в движении'), o.time, (v) => o.time = v),
-              _check(t('Темп / скорость'), o.speed, (v) => o.speed = v),
-              _check(t('Набор высоты'), o.elevation, (v) => o.elevation = v),
+              _check(t('Скорость'), o.speed, (v) => o.speed = v),
+              _check(t('Набор высоты'), o.elevation, (v) => o.elevation = v, subtitle: _demStatus.isEmpty ? null : _demStatus),
               _check(t('Дата, время начала и окончания'), o.dateTime, (v) => o.dateTime = v),
               _check(t('Место (регион)'), o.showRegion, (v) => o.showRegion = v),
               _check(t('Погода во время маршрута'), o.weather, (v) => o.weather = v, subtitle: _weatherStatus),
-              _check(t('Высоты по карте высот (точнее GPS)'), o.demHeights, (v) => o.demHeights = v,
-                  subtitle: _demStatus.isEmpty ? t('Загружаются из интернета один раз и сохраняются') : _demStatus),
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
@@ -460,7 +516,7 @@ class _PosterPageState extends State<PosterPage> {
               _check(t('Подписи: максимум скорости и высоты'), o.peaks, (v) => o.peaks = v),
               if (o.format == PosterFormat.vertical) _check(t('Мини-профиль высоты'), o.profile, (v) => o.profile = v),
               if (_notes.isNotEmpty) _check(t('Заметки на маршруте ({p0})', {'p0': _notes.length}), o.notes, (v) => o.notes = v),
-              _check(t('Способы движения с дистанцией и темпом'), o.legend, (v) => o.legend = v),
+              _check(t('Способы движения с дистанцией и скоростью'), o.legend, (v) => o.legend = v),
               if (_pro) ...[
                 _check(t('Выделять восстановленные участки'), o.showRestored, (v) => o.showRestored = v),
                 _check(t('Скрыть старт и финиш'), o.hideEnds, (v) => o.hideEnds = v,
@@ -477,6 +533,21 @@ class _PosterPageState extends State<PosterPage> {
               ),
             ]),
     );
+    // While the poster is made, the route is drawn on the whole screen; it fades out when the poster is ready.
+    return Stack(children: [
+      screen,
+      Positioned.fill(
+        child: IgnorePointer(
+          ignoring: !_busy,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 500),
+            child: _busy && _pts.length > 1
+                ? Material(key: const ValueKey("building"), child: PosterBuildOverlay(points: _pts))
+                : const SizedBox.shrink(key: ValueKey("idle")),
+          ),
+        ),
+      ),
+    ]);
   }
 
   Widget _check(String title, bool value, void Function(bool) set, {String? subtitle}) => CheckboxListTile(

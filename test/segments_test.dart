@@ -43,9 +43,15 @@ void main() {
     expect(segs.single.mode, TravelMode.walk);
   });
 
+  test('a walk that turns into a taxi ride is split even in walk mode', () {
+    final pts = track([(1.4, 300), (11.0, 240), (1.4, 120)]);
+    final segs = buildSegments(pts, TravelMode.walk);
+    expect(segs.map((s) => s.mode).toList(), [TravelMode.walk, TravelMode.car, TravelMode.walk]);
+  });
+
   test('a mode chosen before the start is kept for the whole walk', () {
     final pts = track([(1.4, 200), (11.0, 200)]);
-    for (final m in [TravelMode.walk, TravelMode.bike, TravelMode.water]) {
+    for (final m in [TravelMode.bike, TravelMode.water]) {
       final segs = buildSegments(pts, m);
       expect(segs.length, 1);
       expect(segs.single.mode, m);

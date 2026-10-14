@@ -8,9 +8,12 @@ import 'altitude.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'elevation.dart';
+import 'gpx_export.dart';
 import 'heal.dart';
+import 'map_page.dart';
 import 'modes.dart';
 import 'notes.dart';
+import 'poster_page.dart';
 import 'segments.dart';
 import 'settings.dart';
 import 'stats.dart';
@@ -64,6 +67,8 @@ class RouteViewPage extends StatefulWidget {
 
 class _RouteViewPageState extends State<RouteViewPage> {
   bool heal = AppSettings.instance.healEnabled;
+  late TravelMode _mode = widget.mode;
+  late String _title = widget.title;
   late Future<_Loaded> _future = _load();
 
   Future<_Loaded> _load() async {
@@ -74,7 +79,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
     final gps = fusedAltitude(pts);
     final alt = await sessionAltitude(widget.sessionId, pts);
     final fused = alt.length == gps.length && _differs(alt, gps);
-    return _Loaded(pts, buildSegments(pts, widget.mode, overrides: overrides), notes, alt, fused);
+    return _Loaded(pts, buildSegments(pts, _mode, overrides: overrides), notes, alt, fused);
   }
 
   static bool _differs(List<double> a, List<double> b) {
@@ -89,7 +94,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(title: Text(_title), actions: [_menu(context)]),
       body: FutureBuilder<_Loaded>(
         future: _future,
         builder: (context, snap) {
@@ -97,18 +102,20 @@ class _RouteViewPageState extends State<RouteViewPage> {
           final data = snap.data!;
           final pts = data.pts;
           if (pts.length < 2) return Center(child: Text(t('Недостаточно точек')));
-          final healCfg = AppSettings.instance.healFor(widget.mode);
+          final healCfg = AppSettings.instance.healFor(_mode);
           final result = analyzeGaps(pts, settings: healCfg);
-          final stats = computeStats(pts, movingSpeedMs: profileOf(widget.mode).movingSpeedMs);
+          final stats = computeStats(pts, movingSpeedMs: profileOf(_mode).movingSpeedMs);
           final multi = data.segments.map((s) => s.mode).toSet().length > 1;
           return ListView(padding: const EdgeInsets.only(bottom: 24), children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${t(widget.mode.label)} · ${_summary(result, pts.length)}'),
+                Text('${t(_mode.label)} · ${_summary(result, pts.length)}'),
                 const SizedBox(height: 4),
                 Text(_statsLine(stats, data.fused ? elevationOfFused(data.altitude) : elevationOf(pts, data.altitude)),
                     style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 12),
+                _actions(context),
               ]),
             ),
             SwitchListTile(
@@ -136,6 +143,98 @@ class _RouteViewPageState extends State<RouteViewPage> {
     );
   }
 
+  /// The three things a person does with a walk: look at it on the map, make a poster, share the GPX file.
+  Widget _actions(BuildContext context) {
+    Widget button(IconData icon, String label, VoidCallback onTap) => Expanded(
+          child: FilledButton.tonalIcon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 20),
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12)),
+          ),
+        );
+    return Row(children: [
+      button(Icons.map_outlined, t('Карта'), () => Navigator.push(
+          context, MaterialPageRoute(builder: (_) => MapPage(sessionId: widget.sessionId, title: _title, mode: _mode)))),
+      const SizedBox(width: 8),
+      button(Icons.image_outlined, t('Постер'), () async {
+        await Navigator.push(
+            context, MaterialPageRoute(builder: (_) => PosterPage(sessionId: widget.sessionId, title: _title, mode: _mode)));
+      }),
+      const SizedBox(width: 8),
+      button(Icons.ios_share, t('GPX'), () => shareSessionGpx(context, widget.sessionId)),
+    ]);
+  }
+
+  Widget _menu(BuildContext context) => PopupMenuButton<String>(
+        onSelected: (v) {
+          switch (v) {
+            case 'rename':
+              _rename();
+            case 'mode':
+              _changeMode();
+            case 'delete':
+              _delete();
+          }
+        },
+        itemBuilder: (_) => [
+          PopupMenuItem(value: 'rename', child: ListTile(leading: const Icon(Icons.edit_outlined), title: Text(t('Переименовать')), dense: true)),
+          PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Изменить режим')), dense: true)),
+          PopupMenuItem(value: 'delete', child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(t('Удалить')), dense: true)),
+        ],
+      );
+
+  Future<void> _rename() async {
+    final name = await showDialog<String>(context: context, builder: (_) => _RenameDialog(initial: _title));
+    if (name == null || !mounted) return;
+    await TrackDb.instance.setSessionMeta(widget.sessionId, {'title': name});
+    if (mounted) setState(() => _title = name.isEmpty ? widget.title : name);
+  }
+
+  Future<void> _changeMode() async {
+    final choice = await showDialog<TravelMode>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: Text(t('Режим прогулки')),
+        children: [
+          for (final m in TravelMode.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(c, m),
+              child: Row(children: [
+                Icon(modeIcon(m), color: modeColor(m)),
+                const SizedBox(width: 12),
+                Expanded(child: Text(t(m.label))),
+                if (m == _mode) const Icon(Icons.check, size: 18),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (choice == null || choice == _mode) return;
+    await TrackDb.instance.setSessionMode(widget.sessionId, choice.code);
+    if (!mounted) return;
+    setState(() => _mode = choice);
+    _reload();
+  }
+
+  Future<void> _delete() async {
+    final nav = Navigator.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(t('Удалить прогулку?')),
+        content: Text(t('Точки, заметки и участки этой прогулки будут удалены. Фото и видео в галерее останутся.')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Удалить'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await TrackDb.instance.deleteSession(widget.sessionId);
+    nav.pop();
+  }
+
   static List<TravelMode> _modePerPoint(int n, List<TrackSegment> segs) {
     final out = List<TravelMode>.filled(n, segs.first.mode);
     for (final s in segs) {
@@ -161,9 +260,9 @@ class _RouteViewPageState extends State<RouteViewPage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
           child: Text(
-              widget.mode == TravelMode.mixed
+              (_mode == TravelMode.mixed || _mode == TravelMode.walk)
                   ? t('Участки определены по скорости движения. Нажмите на участок, чтобы изменить способ.')
-                  : t('Весь маршрут записан в режиме «{p0}». Нажмите на участок, чтобы изменить способ.', {'p0': t(widget.mode.label)}),
+                  : t('Весь маршрут записан в режиме «{p0}». Нажмите на участок, чтобы изменить способ.', {'p0': t(_mode.label)}),
               style: Theme.of(context).textTheme.bodySmall),
         ),
         for (final s in segs)
@@ -362,6 +461,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
       t('Всего {p0}', {'p0': _hms(s.totalSeconds)}),
       t('в движении {p0}', {'p0': _hms(s.movingSeconds)}),
       t('пауза {p0}', {'p0': _hms(s.pausedSeconds)}),
+      if (s.indoorSeconds > 0) t('в помещении {p0}', {'p0': _hms(s.indoorSeconds)}),
     ];
     if (s.maxSpeedMs > 0) parts.add(t('макс. {p}', {'p': Units.speed(s.maxSpeedMs)}));
     if (e.gain > 0 || e.loss > 0) {
@@ -470,4 +570,39 @@ class _RoutePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RoutePainter old) => old.pts != pts || old.heal != heal || old.modes != modes;
+}
+
+/// Asks for the name of a walk; an empty answer removes the name.
+class _RenameDialog extends StatefulWidget {
+  final String initial;
+
+  const _RenameDialog({required this.initial});
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _ctl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text(t('Название прогулки')),
+        content: TextField(
+          controller: _ctl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(hintText: t('Например, «Набережная»')),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(t('Отмена'))),
+          TextButton(onPressed: () => Navigator.pop(context, _ctl.text.trim()), child: Text(t('Сохранить'))),
+        ],
+      );
 }

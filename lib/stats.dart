@@ -12,6 +12,10 @@ class TrackStats {
   final double distanceMeters;
   final double maxSpeedMs;
 
+  /// Seconds of long silences (see [indoorMinSeconds]) that began and ended at the same place: the person
+  /// went indoors, where GPS sees no satellites. Not a break of the route, and not part of [gapSeconds].
+  final int indoorSeconds;
+
   const TrackStats({
     required this.totalSeconds,
     required this.movingSeconds,
@@ -19,7 +23,12 @@ class TrackStats {
     required this.gapSeconds,
     required this.distanceMeters,
     required this.maxSpeedMs,
+    this.indoorSeconds = 0,
   });
+
+  /// A silence of GPS at least this long, ending near where it began, is "indoors".
+  static const int indoorMinSeconds = 300;
+  static const double indoorMaxMeters = 60;
 
   double get avgMovingSpeedMs => movingSeconds == 0 ? 0 : distanceMeters / movingSeconds;
 
@@ -34,13 +43,17 @@ TrackStats computeStats(List<TrackPoint> pts, {double movingSpeedMs = 0.5, int g
     return const TrackStats(
         totalSeconds: 0, movingSeconds: 0, pausedSeconds: 0, gapSeconds: 0, distanceMeters: 0, maxSpeedMs: 0);
   }
-  var moving = 0.0, paused = 0.0, gap = 0.0, dist = 0.0;
+  var moving = 0.0, paused = 0.0, gap = 0.0, dist = 0.0, indoor = 0.0;
   for (var i = 1; i < pts.length; i++) {
     final a = pts[i - 1], b = pts[i];
     final dt = (b.tsMs - a.tsMs) / 1000.0;
     if (dt <= 0) continue;
     if (dt > gapSeconds) {
-      gap += dt;
+      if (dt >= TrackStats.indoorMinSeconds && haversine(a.lat, a.lon, b.lat, b.lon) <= TrackStats.indoorMaxMeters) {
+        indoor += dt;
+      } else {
+        gap += dt;
+      }
       continue;
     }
     final d = haversine(a.lat, a.lon, b.lat, b.lon);
@@ -82,5 +95,6 @@ TrackStats computeStats(List<TrackPoint> pts, {double movingSpeedMs = 0.5, int g
     gapSeconds: gap.round(),
     distanceMeters: dist,
     maxSpeedMs: maxV,
+    indoorSeconds: indoor.round(),
   );
 }

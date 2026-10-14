@@ -97,9 +97,10 @@ adb shell "run-as $pkg cp /data/local/tmp/tropa.db databases/tropa.db"
 adb shell "run-as $pkg rm -f databases/tropa.db-wal databases/tropa.db-shm"
 adb shell am start -n "$pkg/.MainActivity" | Out-Null
 Start-Sleep 30
-Tap 1013 213   # menu
+TapLabel "^Settings" | Out-Null   # since v26 the routes live in Settings -> Data (bottom of the list)
 Start-Sleep 2
-Tap 600 642    # Routes
+1..4 | ForEach-Object { adb shell input swipe 540 1900 540 500 300 | Out-Null; Start-Sleep -Milliseconds 600 }
+TapLabel "^Routes" | Out-Null
 Start-Sleep 3
 Tap 337 727    # Follow the route (first route in the list)
 Start-Sleep 5
@@ -120,9 +121,7 @@ Start-Sleep 4
 # --- 5b. distance goal with out-and-back: set in the UI (the service is not exported, adb cannot start it)
 TapLabel "^Goal$" | Out-Null
 Start-Sleep 2
-TapLabel "^Your own value" | Out-Null
-adb shell input text "0.08" | Out-Null
-adb shell input keyevent 4 | Out-Null     # closes the keyboard only
+1..4 | ForEach-Object { TapLabel "^Less" | Out-Null; Start-Sleep -Milliseconds 400 }   # v26: whole km, minimum 1 km; the card starts at 5 km
 Start-Sleep 1
 TapLabel "^Out and back" | Out-Null
 TapLabel "^Done$" | Out-Null
@@ -131,7 +130,7 @@ adb emu geo fix 105.8542 21.0285 | Out-Null   # stand at the start BEFORE record
 Start-Sleep 3
 TapLabel "^Start recording" | Out-Null
 Start-Sleep 5
-$pos = Walk 105.8542 21.0285 28 0.00004 0.00002          # about 120 m: half way at 40 m, goal at 80 m
+$pos = Walk 105.8542 21.0285 50 0.0002 0.0001          # ~23 m per fix (13 m/s): half way at 500 m, goal at 1 km
 $log = AppLog
 Check "goal: half-way notification" ($log -match "\[GOAL\] half way at")
 Check "goal: reached notification" ($log -match "\[GOAL\] goal reached at")

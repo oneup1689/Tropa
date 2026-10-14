@@ -2,15 +2,16 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'app_hooks.dart';
 import 'l10n.dart';
 import 'main.dart' show HomePage;
 import 'map_page.dart';
 import 'settings_page.dart';
 import 'splash.dart';
 
-/// The frame of the app: the bottom navigation (Walks, Map, Settings), the night gradient behind the tabs in the
-/// dark theme and, on a cold start, the animated splash screen on top. Maps, routes, the planner, the backup and
-/// the log stay in the menu of the Walks screen.
+/// The frame of the app: the bottom navigation (History, Map, Settings), the night gradient behind the tabs in the
+/// dark theme and, on a cold start, the animated splash screen on top. Maps, routes, the backup and the log are in
+/// Settings → Data; the planner is on the start card.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -30,6 +31,15 @@ class _AppShellState extends State<AppShell> {
     // Decide before marking it shown (a lazy field initialiser would run after the mark and never show the splash).
     _splash = !_splashShown && !Platform.environment.containsKey('FLUTTER_TEST');
     _splashShown = true;
+    AppHooks.selectTab = (i) {
+      if (mounted) setState(() => _index = i);
+    };
+  }
+
+  @override
+  void dispose() {
+    AppHooks.selectTab = null;
+    super.dispose();
   }
 
   @override
@@ -64,7 +74,7 @@ class _AppShellState extends State<AppShell> {
           if (i == 1) _mapOpened = true;
         }),
         destinations: [
-          NavigationDestination(icon: const Icon(Icons.route_outlined), selectedIcon: const Icon(Icons.route), label: t('Прогулки')),
+          NavigationDestination(icon: const Icon(Icons.route_outlined), selectedIcon: const Icon(Icons.route), label: t('История')),
           NavigationDestination(icon: const Icon(Icons.map_outlined), selectedIcon: const Icon(Icons.map), label: t('Карта')),
           NavigationDestination(icon: const Icon(Icons.tune), selectedIcon: const Icon(Icons.tune), label: t('Настройки')),
         ],
