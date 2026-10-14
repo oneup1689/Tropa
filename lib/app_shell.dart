@@ -20,11 +20,13 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   static bool _splashShown = false; // only once per process, not again after a theme or language change
   int _index = 0;
-  late bool _splash = !_splashShown && !Platform.environment.containsKey('FLUTTER_TEST');
+  bool _splash = false;
 
   @override
   void initState() {
     super.initState();
+    // Decide before marking it shown (a lazy field initialiser would run after the mark and never show the splash).
+    _splash = !_splashShown && !Platform.environment.containsKey('FLUTTER_TEST');
     _splashShown = true;
   }
 

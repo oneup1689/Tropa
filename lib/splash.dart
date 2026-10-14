@@ -105,14 +105,14 @@ class TropaSplash extends StatefulWidget {
 }
 
 class _TropaSplashState extends State<TropaSplash> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1900));
   bool _out = false;
 
   @override
   void initState() {
     super.initState();
     _c.forward().whenComplete(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
       if (mounted) setState(() => _out = true);
     });
   }
