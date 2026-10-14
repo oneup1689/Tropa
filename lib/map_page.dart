@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'dart:ui' as ui;
 
@@ -8,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
+import 'brand.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'heal.dart';
@@ -105,8 +107,13 @@ class _MapPageState extends State<MapPage> {
   LatLng? _initial;
   double _zoom = 13;
   _Overlay? _overlay;
-  bool _locating = false; // the blue dot with the arrow of the movement direction is shown
-  bool _following = false; // the camera stays on the dot
+  bool _locating = false; // the own position marker is shown (green disc, arrow of the movement direction)
+  bool _following = false; // the camera stays on the marker
+  bool _noMaps = false; // no map is installed at all (the tracker works without one)
+  StreamSubscription<Position>? _posSub;
+  LatLng? _here;
+  double _bearing = 0;
+  bool _hasBearing = false;
 
   @override
   void initState() {
@@ -117,8 +124,8 @@ class _MapPageState extends State<MapPage> {
   @override
   void didUpdateWidget(covariant MapPage old) {
     super.didUpdateWidget(old);
-    // Another tab came to the front: stop the location layer, it would keep the GPS busy.
-    if (old.active && !widget.active && _locating) setState(() => _locating = _following = false);
+    // Another tab came to the front: stop following, it would keep the GPS busy.
+    if (old.active && !widget.active && _locating) _stopLocating();
     // Back on the map tab and there was no map before (maybe one was downloaded in the meantime): try again.
     if (!old.active && widget.active) _retryIfNoMap();
   }
@@ -129,21 +136,30 @@ class _MapPageState extends State<MapPage> {
     setState(() {
       _loading = true;
       _problem = null;
+      _noMaps = false;
     });
     _prepare();
   }
 
   @override
   void dispose() {
+    _posSub?.cancel();
     _liveTimer?.cancel();
     super.dispose();
   }
 
-  /// "Where am I": switches the location layer on (blue dot, arrow of the movement direction) and keeps the camera
-  /// on it; a second tap while following lets the camera go, a third follows again.
+  /// "Where am I": shows the own marker (green disc with the arrow of the movement direction, in the colours of the
+  /// app) and keeps the camera on it; a second tap lets the camera go, a third follows again. The camera also lets go
+  /// when the person drags the map away.
   Future<void> _locate() async {
     if (_locating && _following) {
       setState(() => _following = false);
+      return;
+    }
+    if (_locating) {
+      setState(() => _following = true);
+      final h = _here;
+      if (h != null) await _controller?.animateCamera(CameraUpdate.newLatLng(h));
       return;
     }
     if (!await Geolocator.isLocationServiceEnabled()) {
@@ -161,8 +177,89 @@ class _MapPageState extends State<MapPage> {
       _locating = true;
       _following = true;
     });
+    final last = await Geolocator.getLastKnownPosition();
+    if (last != null) await _onPosition(last);
     final z = _controller?.cameraPosition?.zoom ?? 0;
     if (z < 14) await _controller?.animateCamera(CameraUpdate.zoomTo(15));
+    _posSub?.cancel();
+    final settings = Platform.isAndroid
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 1,
+            intervalDuration: const Duration(seconds: 1),
+            forceLocationManager: true, // plain Android GPS like the recorder: no Google "Location Accuracy" dialog
+          )
+        : AppleSettings(accuracy: LocationAccuracy.high, activityType: ActivityType.fitness, distanceFilter: 1);
+    _posSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+      _onPosition,
+      onError: (Object e) => DebugLog.instance.log('MAP', 'position stream: $e'),
+    );
+  }
+
+  Future<void> _onPosition(Position p) async {
+    final c = _controller;
+    if (c == null || !mounted || !_locating) return;
+    final here = LatLng(p.latitude, p.longitude);
+    // The direction of movement is known only while moving; standing still the marker keeps the last one.
+    if (p.speed >= 0.7 && p.heading >= 0) {
+      _bearing = p.heading;
+      _hasBearing = true;
+    }
+    // The person dragged the map away: stop following.
+    final cam = c.cameraPosition?.target;
+    final prev = _here;
+    if (_following && cam != null && prev != null && _metersBetween(cam, prev) > 60) setState(() => _following = false);
+    _here = here;
+    await c.setGeoJsonSource('locator', _fc([_locatorFeature(here)]));
+    if (_following) await c.animateCamera(CameraUpdate.newLatLng(here));
+  }
+
+  Map<String, Object?> _locatorFeature(LatLng p) => {
+        'type': 'Feature',
+        'properties': {'icon': _hasBearing ? 'me-arrow' : 'me-dot', 'bearing': _bearing},
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [p.longitude, p.latitude],
+        },
+      };
+
+  static double _metersBetween(LatLng a, LatLng b) {
+    final dy = (a.latitude - b.latitude) * 111320;
+    final dx = (a.longitude - b.longitude) * 111320 * math.cos(a.latitude * math.pi / 180);
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  Future<void> _stopLocating() async {
+    await _posSub?.cancel();
+    _posSub = null;
+    _here = null;
+    if (mounted && (_locating || _following)) setState(() => _locating = _following = false);
+    await _controller?.setGeoJsonSource('locator', _fc(const []));
+  }
+
+  /// The marker pictures, drawn in the colours of the app: sand ring, deep-green disc, orange dot or arrow.
+  Future<Uint8List> _markerPng({required bool arrow}) async {
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    const mid = Offset(48, 48);
+    c.drawCircle(mid + const Offset(0, 2.5), 31, Paint()..color = const Color(0x40000000));
+    c.drawCircle(mid, 31, Paint()..color = brandSand);
+    c.drawCircle(mid, 25, Paint()..color = brandGreen);
+    if (arrow) {
+      c.drawPath(
+        Path()
+          ..moveTo(48, 22)
+          ..lineTo(62, 62)
+          ..lineTo(48, 54)
+          ..lineTo(34, 62)
+          ..close(),
+        Paint()..color = brandAccent,
+      );
+    } else {
+      c.drawCircle(mid, 9, Paint()..color = brandAccent);
+    }
+    final img = await rec.endRecording().toImage(96, 96);
+    return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
   }
 
   void _say(String text) {
@@ -210,6 +307,7 @@ class _MapPageState extends State<MapPage> {
         }
         setState(() {
           _loading = false;
+          _noMaps = all.isEmpty && widget.tab;
           _problem = all.isEmpty
               ? (MapStore.lastListError ?? t('Нет загруженных карт. Добавьте файл карты в разделе «Карты».'))
               : t('Для этого места нет карты. Загруженные регионы не покрывают его.');
@@ -232,6 +330,7 @@ class _MapPageState extends State<MapPage> {
             ('gaps', overlay.gaps),
             ('marks', overlay.marks),
             ('me', _fc(const [])),
+            ('locator', _fc(const [])),
           ])
             id: {'type': 'geojson', 'data': fc},
         },
@@ -294,6 +393,19 @@ class _MapPageState extends State<MapPage> {
       line('restored', '#FB8C00', 4.5),
       dots('marks'),
       dots('me'),
+      {
+        'id': 'tropa-locator',
+        'type': 'symbol',
+        'source': 'locator',
+        'layout': {
+          'icon-image': ['get', 'icon'],
+          'icon-rotate': ['get', 'bearing'],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-size': 0.9,
+        },
+      },
       {
         // Note texts next to their markers (fonts are the bundled Noto Sans glyphs).
         'id': 'tropa-marks-label',
@@ -419,6 +531,10 @@ class _MapPageState extends State<MapPage> {
       await _capturePosterMap(c);
       return;
     }
+    if (widget.tab) {
+      await c.addImage('me-dot', await _markerPng(arrow: false));
+      await c.addImage('me-arrow', await _markerPng(arrow: true));
+    }
     if (widget.live || widget.tab) {
       _liveTimer = Timer.periodic(const Duration(seconds: 2), (_) => _tickLive());
       _tickLive();
@@ -482,6 +598,40 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  /// No map is installed: say so, and that the tracker does not need one.
+  Widget _noMapsView(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.map_outlined, size: 60, color: cs.primary),
+          const SizedBox(height: 14),
+          Text(t('Карта не загружена'), style: tt.titleLarge, textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          Text(
+            t('Трекер работает и без карты: маршрут записывается по GPS. Карта нужна, чтобы видеть, где вы находитесь, и для постеров. Скачайте нужный регион, пока есть Wi-Fi.'),
+            textAlign: TextAlign.center,
+            style: tt.bodyMedium,
+          ),
+          const SizedBox(height: 22),
+          FilledButton.icon(
+            icon: const Icon(Icons.download_for_offline_outlined),
+            label: Text(t('Скачать карту')),
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage()));
+              if (_noMaps) {
+                setState(() => _noMaps = false);
+                _retryIfNoMap();
+              }
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -511,7 +661,9 @@ class _MapPageState extends State<MapPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _problem != null || _stylePath == null
+          : _noMaps
+              ? _noMapsView(context)
+              : _problem != null || _stylePath == null
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
@@ -535,15 +687,8 @@ class _MapPageState extends State<MapPage> {
                     onMapCreated: (c) => _controller = c,
                     onStyleLoadedCallback: _onStyleLoaded,
                     compassEnabled: true,
-                    myLocationEnabled: _locating,
-                    myLocationTrackingMode: _following ? MyLocationTrackingMode.tracking : MyLocationTrackingMode.none,
-                    // The arrow shows the direction of movement (Android); iPhone has no such mode: the compass cone.
-                    myLocationRenderMode: !_locating
-                        ? MyLocationRenderMode.normal
-                        : (Platform.isAndroid ? MyLocationRenderMode.gps : MyLocationRenderMode.compass),
-                    onCameraTrackingDismissed: () {
-                      if (mounted) setState(() => _following = false);
-                    },
+                    myLocationEnabled: false,
+                    trackCameraPosition: widget.tab,
                     attributionButtonPosition: AttributionButtonPosition.bottomLeft,
                   ),
                   if (widget.tab)

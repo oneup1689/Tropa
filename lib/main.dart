@@ -123,6 +123,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _ticker;
   ReadinessResult? _ready; // can the phone record right now (the indicator on the start card)
   bool? _lastGps;
+  double _weekM = 0; // distance and number of the walks of the last 7 days (idle start card)
+  int _weekN = 0;
 
   @override
   void initState() {
@@ -184,6 +186,22 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _reload() async {
     final s = await TrackDb.instance.sessions();
     if (mounted) setState(() => sessions = s);
+    await _recomputeWeek();
+  }
+
+  Future<void> _recomputeWeek() async {
+    final cutoff = DateTime.now().subtract(const Duration(days: 7)).millisecondsSinceEpoch;
+    final week = [for (final x in sessions) if (x.startMs >= cutoff && x.pointCount > 1) x];
+    var m = 0.0;
+    for (final x in week) {
+      m += (await _summary(x)).distanceM;
+    }
+    if (mounted && (m != _weekM || week.length != _weekN)) {
+      setState(() {
+        _weekM = m;
+        _weekN = week.length;
+      });
+    }
   }
 
   void _snack(String text) {
@@ -667,32 +685,37 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           fontFamily: headingFont, fontSize: 26, color: Colors.white, fontVariations: [FontVariation('wght', 700)])),
               ]),
               const SizedBox(height: 16),
-              _modeChips(recording),
-              const SizedBox(height: 20),
-              Row(children: [
-                Expanded(flex: 5, child: Padding(padding: const EdgeInsets.only(right: 12), child: _stat(Units.dist(rec.distanceM), t('Дистанция')))),
-                Expanded(
+              _modeRow(recording),
+              if (recording) ...[
+                const SizedBox(height: 20),
+                Row(children: [
+                  Expanded(flex: 5, child: Padding(padding: const EdgeInsets.only(right: 12), child: _stat(Units.dist(rec.distanceM), t('Дистанция')))),
+                  Expanded(
+                      flex: 4,
+                      child: Padding(
+                          padding: const EdgeInsets.only(right: 10),
+                          child: _stat(_fmt(Duration(seconds: rec.movingSeconds)), rec.autoPaused || rec.manualPause ? t('Пауза') : t('В движении')))),
+                  Expanded(
                     flex: 4,
-                    child: Padding(
-                        padding: const EdgeInsets.only(right: 10),
-                        child: _stat(recording ? _fmt(Duration(seconds: rec.movingSeconds)) : '—',
-                            rec.autoPaused || rec.manualPause ? t('Пауза') : t('В движении')))),
-                Expanded(
-                  flex: 4,
-                  child: _stat(
-                    !recording
-                        ? '—'
-                        : (rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('нет {s} с', {'s': rec.sinceFixSec}) : Units.shortDist(rec.lastAccuracy)),
-                    recording && rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('Сигнал') : t('Точность'),
+                    child: _stat(
+                      rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('нет {s} с', {'s': rec.sinceFixSec}) : Units.shortDist(rec.lastAccuracy),
+                      rec.gpsEnabled && rec.sinceFixSec >= 20 ? t('Сигнал') : t('Точность'),
+                    ),
                   ),
-                ),
-              ]),
+                ]),
+              ] else if (_weekN > 0) ...[
+                const SizedBox(height: 18),
+                _weekLine(),
+              ],
               if (recording && rec.goalM > 0) ...[
                 const SizedBox(height: 16),
                 _goalProgress(),
               ],
               const SizedBox(height: 22),
-              _recordButton(recording),
+              Row(children: [
+                if (Platform.isAndroid) ...[_goalButton(), const SizedBox(width: 10)],
+                Expanded(child: _recordButton(recording)),
+              ]),
               if (recording) ...[
                 const SizedBox(height: 10),
                 Row(children: [
@@ -749,66 +772,82 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
       ]);
 
-  Widget _modeChips(bool recording) {
+  /// The ways of travelling as five round icons (the chosen one is white), its name underneath.
+  Widget _modeRow(bool recording) {
     final current = recording ? rec.activeMode : AppSettings.instance.travelMode;
-    return Wrap(spacing: 8, runSpacing: 8, children: [
-      for (final m in TravelMode.values)
-        GestureDetector(
-          onTap: recording
-              ? null
-              : () async {
-                  await AppSettings.instance.setTravelMode(m);
-                  if (mounted) setState(() {});
-                },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: current == m ? Colors.white : const Color(0x26FFFFFF),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(modeIcon(m), size: 17, color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white)),
-              const SizedBox(width: 6),
-              Text(
-                t(m.label),
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontVariations: const [FontVariation('wght', 600)],
-                  color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        for (final m in TravelMode.values)
+          Expanded(
+            child: Center(
+              child: Tooltip(
+                message: t(m.label),
+                child: GestureDetector(
+                  onTap: recording
+                      ? null
+                      : () async {
+                          await AppSettings.instance.setTravelMode(m);
+                          if (mounted) setState(() {});
+                        },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: current == m ? Colors.white : const Color(0x26FFFFFF)),
+                    child: Icon(modeIcon(m), size: 22, color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white)),
+                  ),
                 ),
               ),
-            ]),
+            ),
           ),
-        ),
-      if (Platform.isAndroid) _goalChip(),
+      ]),
+      const SizedBox(height: 8),
+      Text(t(current.label), style: const TextStyle(color: Colors.white70, fontSize: 13)),
     ]);
   }
 
+  /// "This week: 18.4 km · 5 walks": what the idle card says instead of empty counters.
+  Widget _weekLine() => Row(children: [
+        const Icon(Icons.insights, size: 18, color: Colors.white70),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            t('За неделю: {d} · {n} {w}', {
+              'd': Units.dist(_weekM, digits: 1),
+              'n': _weekN,
+              'w': plural(_weekN, 'прогулка', 'прогулки', 'прогулок', en1: 'walk', enN: 'walks'),
+            }),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+        ),
+      ]);
+
   // ------------------------------------------------------------------ distance goal
 
-  /// A chip next to the travel modes: opens the goal sheet; shows the goal once it is set.
-  Widget _goalChip() {
+  /// A round flag button next to the record button: opens the goal sheet; shows the goal once it is set.
+  Widget _goalButton() {
     final goal = rec.activeGoalM;
     final set = goal > 0;
     final fg = set ? TropaColors.forestDeep : Colors.white;
-    return GestureDetector(
-      onTap: _openGoalSheet,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: set ? TropaColors.mint : const Color(0x26FFFFFF),
-          borderRadius: BorderRadius.circular(22),
+    return Tooltip(
+      message: t('Цель'),
+      child: GestureDetector(
+        onTap: _openGoalSheet,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          height: 58,
+          constraints: const BoxConstraints(minWidth: 58),
+          padding: EdgeInsets.symmetric(horizontal: set ? 14 : 0),
+          decoration: BoxDecoration(color: set ? TropaColors.mint : const Color(0x26FFFFFF), borderRadius: BorderRadius.circular(29)),
+          child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.flag_outlined, size: 24, color: fg),
+            if (set) ...[
+              const SizedBox(width: 6),
+              Text('${Units.distTrim(goal)}${rec.activeGoalRound ? ' ↔' : ''}',
+                  style: TextStyle(fontSize: 14, fontVariations: const [FontVariation('wght', 700)], color: fg)),
+            ],
+          ]),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.flag_outlined, size: 17, color: fg),
-          const SizedBox(width: 6),
-          Text(
-            set ? '${t('Цель')} ${Units.distTrim(goal)}${rec.activeGoalRound ? ' ↔' : ''}' : t('Цель'),
-            style: TextStyle(fontSize: 13.5, fontVariations: const [FontVariation('wght', 600)], color: fg),
-          ),
-        ]),
       ),
     );
   }

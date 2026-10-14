@@ -472,4 +472,9 @@ const Map<String, String> enStrings = {
   // map tab
   'Где я': 'Where am I',
   'Включите GPS, чтобы найти вас на карте': 'Turn on GPS to find you on the map',
+  // start card
+  'За неделю: {d} · {n} {w}': 'This week: {d} · {n} {w}',
+  'Карта не загружена': 'No map downloaded',
+  'Трекер работает и без карты: маршрут записывается по GPS. Карта нужна, чтобы видеть, где вы находитесь, и для постеров. Скачайте нужный регион, пока есть Wi-Fi.':
+      'The tracker works without a map: the route is recorded by GPS. A map is needed to see where you are and for posters. Download the region you need while you have Wi-Fi.',
 };
