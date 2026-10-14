@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'db.dart';
@@ -41,6 +43,11 @@ class MapPage extends StatefulWidget {
   /// With [posterCapture]: several walks for a multi-route poster (the map frames all of them).
   final List<int>? captureSessionIds;
 
+  /// The map as a tab of the main screen: no back button, a "where am I" button, and the walk that is being
+  /// recorded is drawn on it. [active] is false while another tab is shown (the location layer is switched off then).
+  final bool tab;
+  final bool active;
+
   const MapPage({
     super.key,
     this.sessionId,
@@ -50,6 +57,8 @@ class MapPage extends StatefulWidget {
     this.mode = TravelMode.mixed,
     this.posterCapture,
     this.captureSessionIds,
+    this.tab = false,
+    this.active = true,
   });
 
   @override
@@ -96,6 +105,8 @@ class _MapPageState extends State<MapPage> {
   LatLng? _initial;
   double _zoom = 13;
   _Overlay? _overlay;
+  bool _locating = false; // the blue dot with the arrow of the movement direction is shown
+  bool _following = false; // the camera stays on the dot
 
   @override
   void initState() {
@@ -104,9 +115,58 @@ class _MapPageState extends State<MapPage> {
   }
 
   @override
+  void didUpdateWidget(covariant MapPage old) {
+    super.didUpdateWidget(old);
+    // Another tab came to the front: stop the location layer, it would keep the GPS busy.
+    if (old.active && !widget.active && _locating) setState(() => _locating = _following = false);
+    // Back on the map tab and there was no map before (maybe one was downloaded in the meantime): try again.
+    if (!old.active && widget.active) _retryIfNoMap();
+  }
+
+  /// Prepares the map again when the last attempt found no map for the place.
+  void _retryIfNoMap() {
+    if (_stylePath != null || _loading) return;
+    setState(() {
+      _loading = true;
+      _problem = null;
+    });
+    _prepare();
+  }
+
+  @override
   void dispose() {
     _liveTimer?.cancel();
     super.dispose();
+  }
+
+  /// "Where am I": switches the location layer on (blue dot, arrow of the movement direction) and keeps the camera
+  /// on it; a second tap while following lets the camera go, a third follows again.
+  Future<void> _locate() async {
+    if (_locating && _following) {
+      setState(() => _following = false);
+      return;
+    }
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      _say(t('Включите GPS, чтобы найти вас на карте'));
+      return;
+    }
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      _say(t('Нужен доступ к геолокации. Разрешите его в настройках приложения.'));
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _locating = true;
+      _following = true;
+    });
+    final z = _controller?.cameraPosition?.zoom ?? 0;
+    if (z < 14) await _controller?.animateCamera(CameraUpdate.zoomTo(15));
+  }
+
+  void _say(String text) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<List<TrackPoint>> _sessionPoints() async {
@@ -359,7 +419,7 @@ class _MapPageState extends State<MapPage> {
       await _capturePosterMap(c);
       return;
     }
-    if (widget.live) {
+    if (widget.live || widget.tab) {
       _liveTimer = Timer.periodic(const Duration(seconds: 2), (_) => _tickLive());
       _tickLive();
       return;
@@ -376,12 +436,13 @@ class _MapPageState extends State<MapPage> {
     final rec = Recorder.instance;
     if (c == null || !mounted) return;
     final sid = rec.sessionId;
+    if (widget.tab && !rec.recording) return; // the tab only draws a walk that is being recorded
     if (sid != null) {
       final pts = await TrackDb.instance.points(sid);
       final line = [for (final p in pts) LatLng(p.lat, p.lon)];
       if (line.length >= 2) await c.setGeoJsonSource('track', _fc([_lineFeature(line)]));
     }
-    if (rec.lastLat != 0) {
+    if (rec.lastLat != 0 && !widget.tab) {
       final here = LatLng(rec.lastLat, rec.lastLon);
       await c.setGeoJsonSource('me', _fc([_pointFeature(here, color: '#1E88E5', radius: 9)]));
       if (_follow) await c.animateCamera(CameraUpdate.newLatLng(here));
@@ -441,7 +502,10 @@ class _MapPageState extends State<MapPage> {
           IconButton(
             icon: const Icon(Icons.map_outlined),
             tooltip: t('Карты'),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage())),
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage()));
+              _retryIfNoMap();
+            },
           ),
         ],
       ),
@@ -455,7 +519,10 @@ class _MapPageState extends State<MapPage> {
                       Text(_problem ?? t('Карта недоступна'), textAlign: TextAlign.center),
                       const SizedBox(height: 16),
                       FilledButton(
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage())),
+                        onPressed: () async {
+                          await Navigator.push(context, MaterialPageRoute(builder: (_) => const MapsPage()));
+                          _retryIfNoMap();
+                        },
                         child: Text(t('Открыть «Карты»')),
                       ),
                     ]),
@@ -468,9 +535,28 @@ class _MapPageState extends State<MapPage> {
                     onMapCreated: (c) => _controller = c,
                     onStyleLoadedCallback: _onStyleLoaded,
                     compassEnabled: true,
-                    myLocationEnabled: false,
+                    myLocationEnabled: _locating,
+                    myLocationTrackingMode: _following ? MyLocationTrackingMode.tracking : MyLocationTrackingMode.none,
+                    // The arrow shows the direction of movement (Android); iPhone has no such mode: the compass cone.
+                    myLocationRenderMode: !_locating
+                        ? MyLocationRenderMode.normal
+                        : (Platform.isAndroid ? MyLocationRenderMode.gps : MyLocationRenderMode.compass),
+                    onCameraTrackingDismissed: () {
+                      if (mounted) setState(() => _following = false);
+                    },
                     attributionButtonPosition: AttributionButtonPosition.bottomLeft,
                   ),
+                  if (widget.tab)
+                    Positioned(
+                      right: 12,
+                      bottom: 28,
+                      child: FloatingActionButton(
+                        heroTag: 'map-locate',
+                        tooltip: t('Где я'),
+                        onPressed: _locate,
+                        child: Icon(_following ? Icons.my_location : Icons.location_searching),
+                      ),
+                    ),
                   if (widget.live)
                     Positioned(
                       right: 12,

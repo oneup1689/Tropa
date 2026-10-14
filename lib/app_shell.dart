@@ -3,15 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'l10n.dart';
-import 'main.dart' show HomePage, HomePageState;
-import 'maps_page.dart';
-import 'routes_page.dart';
+import 'main.dart' show HomePage;
+import 'map_page.dart';
 import 'settings_page.dart';
 import 'splash.dart';
 
-/// The frame of the app: the bottom navigation (Walks, Maps, Routes, Settings), the night gradient behind the tabs
-/// in the dark theme and, on a cold start, the animated splash screen on top. The planner, the backup and the log
-/// stay in the menu of the Walks screen.
+/// The frame of the app: the bottom navigation (Walks, Map, Settings), the night gradient behind the tabs in the
+/// dark theme and, on a cold start, the animated splash screen on top. Maps, routes, the planner, the backup and
+/// the log stay in the menu of the Walks screen.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -22,7 +21,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   static bool _splashShown = false; // only once per process, not again after a theme or language change
   int _index = 0;
-  final _home = GlobalKey<HomePageState>();
+  bool _mapOpened = false; // the map is created on the first visit, not at the start of the app
   bool _splash = false;
 
   @override
@@ -33,19 +32,17 @@ class _AppShellState extends State<AppShell> {
     _splashShown = true;
   }
 
-  /// "Go along this route" on the Routes tab: back to the walks and start the recording there.
-  void _startRoute(int routeId) {
-    setState(() => _index = 0);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _home.currentState?.startAlongRoute(routeId));
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     Widget body = IndexedStack(
       index: _index,
-      children: [HomePage(key: _home), MapsPage(), RoutesPage(onPick: _startRoute), SettingsPage()],
+      children: [
+        const HomePage(),
+        if (_mapOpened || _index == 1) MapPage(tab: true, active: _index == 1, title: t('Карта')) else const SizedBox.shrink(),
+        SettingsPage(),
+      ],
     );
     if (dark) {
       // The tabs sit on the gradient of the posters: their own backgrounds become see-through.
@@ -62,11 +59,13 @@ class _AppShellState extends State<AppShell> {
       body: body,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) => setState(() {
+          _index = i;
+          if (i == 1) _mapOpened = true;
+        }),
         destinations: [
           NavigationDestination(icon: const Icon(Icons.route_outlined), selectedIcon: const Icon(Icons.route), label: t('Прогулки')),
-          NavigationDestination(icon: const Icon(Icons.map_outlined), selectedIcon: const Icon(Icons.map), label: t('Карты')),
-          NavigationDestination(icon: const Icon(Icons.alt_route), selectedIcon: const Icon(Icons.alt_route), label: t('Маршруты')),
+          NavigationDestination(icon: const Icon(Icons.map_outlined), selectedIcon: const Icon(Icons.map), label: t('Карта')),
           NavigationDestination(icon: const Icon(Icons.tune), selectedIcon: const Icon(Icons.tune), label: t('Настройки')),
         ],
       ),

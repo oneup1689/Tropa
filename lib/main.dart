@@ -534,8 +534,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             await nav.push(MaterialPageRoute(builder: (_) => SettingsPage()));
           case 'maps':
             await nav.push(MaterialPageRoute(builder: (_) => MapsPage()));
-          case 'openmap':
-            await nav.push(MaterialPageRoute(builder: (_) => const MapPage()));
           case 'routes':
             await _openRoutes();
           case 'multi':
@@ -557,7 +555,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       },
       itemBuilder: (_) => [
         item('settings', Icons.tune, t('Настройки')),
-        item('openmap', Icons.map_outlined, t('Открыть карту')),
         item('maps', Icons.download_for_offline_outlined, t('Карты')),
         item('routes', Icons.alt_route, t('Маршруты (импорт GPX)')),
         item('planner', Icons.event_available_outlined, t('Планировщик')),

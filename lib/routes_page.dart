@@ -12,10 +12,7 @@ import 'units.dart';
 /// Imported routes (GPX files from other people or other apps). "Идти по маршруту" returns the
 /// route id to the caller, which starts a recording with off-route warnings.
 class RoutesPage extends StatefulWidget {
-  /// Used when the page is a tab of the main screen: called with the route id instead of closing the page.
-  final ValueChanged<int>? onPick;
-
-  const RoutesPage({super.key, this.onPick});
+  const RoutesPage({super.key});
 
   @override
   State<RoutesPage> createState() => _RoutesPageState();
@@ -82,7 +79,7 @@ class _RoutesPageState extends State<RoutesPage> {
                 const SizedBox(height: 8),
                 Wrap(spacing: 8, children: [
                   FilledButton.icon(
-                    onPressed: () => widget.onPick != null ? widget.onPick!(r.id) : Navigator.pop(context, r.id),
+                    onPressed: () => Navigator.pop(context, r.id),
                     icon: const Icon(Icons.navigation),
                     label: Text(t('Идти по маршруту')),
                   ),

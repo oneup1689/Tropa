@@ -469,4 +469,7 @@ const Map<String, String> enStrings = {
   'Всё готово к прогулке': 'Everything is ready for the walk',
   'Можно идти, но есть замечания': 'You can go, but there are notes',
   'Запись не начнётся': 'Recording will not start',
+  // map tab
+  'Где я': 'Where am I',
+  'Включите GPS, чтобы найти вас на карте': 'Turn on GPS to find you on the map',
 };
