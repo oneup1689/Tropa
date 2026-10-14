@@ -184,6 +184,25 @@ ThemeData buildTheme(Brightness brightness) {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       showDragHandle: true,
     ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: scheme.surfaceContainerLow,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      height: 68,
+      indicatorColor: scheme.primaryContainer,
+      indicatorShape: const StadiumBorder(),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (s) => _body(12, s.contains(WidgetState.selected) ? 600 : 500).copyWith(
+          color: s.contains(WidgetState.selected) ? scheme.onSurface : scheme.onSurfaceVariant,
+        ),
+      ),
+      iconTheme: WidgetStateProperty.resolveWith(
+        (s) => IconThemeData(
+          size: 24,
+          color: s.contains(WidgetState.selected) ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+        ),
+      ),
+    ),
     popupMenuTheme: PopupMenuThemeData(
       color: scheme.surfaceContainerHigh,
       surfaceTintColor: Colors.transparent,

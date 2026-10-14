@@ -11,6 +11,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'app_shell.dart';
 import 'backup.dart';
 import 'brand.dart';
 import 'db.dart';
@@ -89,7 +90,7 @@ class TropaApp extends StatelessWidget {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
-          home: HomePage(),
+          home: const AppShell(),
         ),
       ),
     );
