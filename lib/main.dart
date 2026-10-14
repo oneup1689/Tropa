@@ -26,6 +26,7 @@ import 'multi_poster_page.dart';
 import 'notes.dart';
 import 'planner_page.dart';
 import 'poster_page.dart';
+import 'readiness.dart';
 import 'recorder.dart';
 import 'route_view.dart';
 import 'routes_page.dart';
@@ -114,16 +115,20 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final rec = Recorder.instance;
   List<SessionInfo> sessions = [];
   final Map<int, Future<_Summary>> _summaries = {};
   final Map<int, int> _summaryCount = {};
   Timer? _ticker;
+  ReadinessResult? _ready; // can the phone record right now (the indicator on the start card)
+  bool? _lastGps;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshReadiness();
     rec.addListener(_onChange);
     AppSettings.instance.addListener(_onChange); // e.g. Pro mode switched on: the menu shows the extra items
     var tick = 0;
@@ -139,13 +144,41 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _ticker?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     rec.removeListener(_onChange);
     AppSettings.instance.removeListener(_onChange);
     super.dispose();
   }
 
   void _onChange() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    // GPS switched on or off in the phone: the indicator follows at once.
+    if (_lastGps != rec.gpsEnabled) {
+      _lastGps = rec.gpsEnabled;
+      _refreshReadiness();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshReadiness(); // back from the system settings
+  }
+
+  Future<void> _refreshReadiness() async {
+    final r = await checkReadiness();
+    if (mounted) setState(() => _ready = r);
+  }
+
+  Future<void> _openReadiness() async {
+    final r = _ready ?? await checkReadiness();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ReadinessSheet(initial: r, onChanged: (v) => mounted ? setState(() => _ready = v) : null),
+    );
+    await _refreshReadiness();
   }
 
   Future<void> _reload() async {
@@ -606,7 +639,8 @@ class _HomePageState extends State<HomePage> {
     final elapsed = rec.startedAt == null ? Duration.zero : DateTime.now().difference(rec.startedAt!);
     final recording = rec.recording;
     final gradient = dark ? const [Color(0xFF14463A), Color(0xFF0B2A25)] : const [Color(0xFF1F6B4A), Color(0xFF0B3D2E)];
-    final label = recording ? (rec.manualPause ? t('ПАУЗА') : t('ЗАПИСЬ')) : t('ГОТОВ К ПРОГУЛКЕ');
+    final ready = _ready;
+    final label = recording ? (rec.manualPause ? t('ПАУЗА') : t('ЗАПИСЬ')) : (ready?.label ?? t('ГОТОВ К ПРОГУЛКЕ'));
     return ClipRRect(
       borderRadius: BorderRadius.circular(30),
       child: Container(
@@ -617,7 +651,13 @@ class _HomePageState extends State<HomePage> {
             padding: const EdgeInsets.all(20),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                _StatusPill(recording: recording, paused: rec.manualPause, label: label),
+                _StatusPill(
+                  recording: recording,
+                  paused: rec.manualPause,
+                  label: label,
+                  tone: recording || ready == null ? null : readinessColor(ready.level),
+                  onTap: recording ? null : _openReadiness,
+                ),
                 const Spacer(),
                 if (recording)
                   Text(_fmt(elapsed),
@@ -985,8 +1025,10 @@ class _StatusPill extends StatefulWidget {
   final bool recording;
   final bool paused;
   final String label;
+  final Color? tone; // overrides the dot colour while not recording (ready / warning / blocked)
+  final VoidCallback? onTap; // opens the readiness sheet
 
-  const _StatusPill({required this.recording, required this.paused, required this.label});
+  const _StatusPill({required this.recording, required this.paused, required this.label, this.tone, this.onTap});
 
   @override
   State<_StatusPill> createState() => _StatusPillState();
@@ -1003,8 +1045,8 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.paused ? Colors.amber : (widget.recording ? const Color(0xFFFF5252) : const Color(0xFF69F0AE));
-    return Container(
+    final color = widget.paused ? Colors.amber : (widget.recording ? const Color(0xFFFF5252) : (widget.tone ?? const Color(0xFF69F0AE)));
+    final pill = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(color: const Color(0x26FFFFFF), borderRadius: BorderRadius.circular(20)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1020,10 +1062,15 @@ class _StatusPillState extends State<_StatusPill> with SingleTickerProviderState
           ),
         ),
         const SizedBox(width: 8),
-        Text(widget.label,
-            style: const TextStyle(color: Colors.white, fontSize: 12.5, letterSpacing: 0.8, fontVariations: [FontVariation('wght', 700)])),
+        Flexible(
+          child: Text(widget.label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 12.5, letterSpacing: 0.8, fontVariations: [FontVariation('wght', 700)])),
+        ),
+        if (widget.onTap != null) ...[const SizedBox(width: 2), const Icon(Icons.chevron_right, size: 18, color: Colors.white70)],
       ]),
     );
+    return widget.onTap == null ? pill : GestureDetector(behavior: HitTestBehavior.opaque, onTap: widget.onTap, child: pill);
   }
 }
 
