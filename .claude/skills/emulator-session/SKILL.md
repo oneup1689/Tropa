@@ -27,7 +27,7 @@ adb wait-for-device; do { Start-Sleep 5; $b = adb shell getprop sys.boot_complet
 - Log: `adb shell "run-as app.tropa.tropa cat app_flutter/tropa_debug_log.txt"` (`$env:MSYS_NO_PATHCONV=1` for paths).
 - Binary files: never use `>` redirection in Windows PowerShell 5.1 for DB files; use `adb shell "run-as ... cat ... > /data/local/tmp/x"` then `adb pull`.
 - Wi-Fi off: `adb shell svc wifi disable` (mobile data stays: status bar shows LTE). Restore with `enable`.
-- Low-storage test: fill with `dd if=/dev/zero of=/data/local/tmp/filler.bin bs=1048576 count=2500`, afterwards free it with `truncate -s 0` (the tool blocks `rm` in PowerShell).
+- Low-storage test: fill with `dd if=/dev/zero of=/data/local/tmp/filler.bin bs=1048576 count=2500`, afterwards free it with `truncate -s 0` (the tool blocks `rm` in PowerShell). WARNING: the AVD disk image (`userdata-qemu.img.qcow2`) only grows and never shrinks, so every such fill permanently adds the filled size on the PC disk (in Oct 2026 it reached 8.4 GB for 2.9 GB of real data). Do this test rarely, and tell the owner that the image should be compacted/wiped afterwards (see section 6).
 - Restore anything you changed (Wi-Fi, location mode, filler file, language/units/Pro mode in the app if it matters for the next test).
 
 ## 4. Clean up (ALWAYS at the end, unless the next step is already planned and restart is slow, then say that you keep it running)
@@ -40,6 +40,16 @@ adb kill-server
 Get-Process | ? { $_.ProcessName -match "qemu|emulator|adb|java|dart|flutter|gradle" }   # must be empty
 ```
 `emulator -kill` helper processes exit by themselves within ~20 s. Also close browser tabs / preview servers opened for the task, and delete temporary files you created outside the project (screenshots in the scratchpad can stay).
+
+## 6. Disk hygiene (the PC disk is almost full: C: had 0.7 GB free in Oct 2026)
+Cause found 2026-10-14: a leaked 5 GB task output, an AVD image grown to 8.4 GB, a stale quick-boot snapshot (2 GB), a forgotten test AVD with its system image (6 + 2.4 GB). Rules:
+- **No spare AVDs.** Use only `Pixel_5`. A temporary AVD (other Android version, Play Store, destructive test) is created for one task and removed at its end: `avdmanager delete avd -n <name>` (or delete `~\.android\avd\<name>.avd` and `.ini`), and remove its now-unused system image from `Sdk\system-images`. Never leave one "for later" without telling the owner.
+- Always start with `-no-snapshot-save`; if `~\.android\avd\Pixel_5.avd\snapshots` exists, tell the owner (2 GB, stale).
+- At the end of a work stretch (and always when a project/stage is finished) check sizes: `Get-ChildItem ~\.android\avd -Recurse -File | Measure Length -Sum`, AVD folder should stay below ~6 GB; if the `.qcow2` is far larger than real data (`adb shell df /data`), propose compaction (`qemu-img convert -O qcow2`) or `-wipe-data`, do not do it silently.
+- Temp files of the work (APK copies, unpacked archives, screenshots, DB pulls, rendered posters in `dist/`) are deleted when no longer needed; `build/` can be cleaned with `flutter clean` when a stage is closed (ask first: next build is slow).
+- Never start an interactive REPL (`python`, `node`, `sqlite3` without script) as a background task: with no stdin it loops and writes gigabytes into `%LOCALAPPDATA%\Temp\claude\...\tasks\*.output`. Run scripts from files only. After long sessions glance at that folder (`Get-ChildItem $env:LOCALAPPDATA\Temp\claude -Recurse -File | ? Length -gt 100MB`).
+- Before deleting anything big that is not clearly ours (other projects' AVDs, system images, Chrome profiles, caches) ask the owner; deletion of own temp files and the throwaway AVD created in this task is fine without asking.
+- When free space on C: is under ~10 GB, say so at the start of the task and suggest a cleanup pass.
 
 ## 5. Report
 Say what was checked on the emulator and what was NOT (phone-only things: real GPS, Xiaomi battery/autostart, HyperOS), and that cleanup is done (or what was left running and why).
