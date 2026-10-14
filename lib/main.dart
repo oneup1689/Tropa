@@ -112,10 +112,10 @@ class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomePage> createState() => HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final rec = Recorder.instance;
   List<SessionInfo> sessions = [];
   final Map<int, Future<_Summary>> _summaries = {};
@@ -359,6 +359,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _openRoutes() async {
     final routeId = await Navigator.push<int>(context, MaterialPageRoute(builder: (_) => RoutesPage()));
     if (routeId == null || !mounted) return;
+    await startAlongRoute(routeId);
+  }
+
+  /// Starts a recording along an imported route (also called from the Routes tab).
+  Future<void> startAlongRoute(int routeId) async {
     if (rec.recording) {
       _snack(t('Сначала остановите текущую запись'));
       return;
