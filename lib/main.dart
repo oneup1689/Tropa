@@ -824,7 +824,7 @@ class _HomePageState extends State<HomePage> {
         icon: Icon(recording ? Icons.stop_rounded : Icons.play_arrow_rounded, size: 30),
         label: Text(recording ? t('Остановить') : t('Начать запись'), style: const TextStyle(fontSize: 16.5)),
         style: FilledButton.styleFrom(
-          backgroundColor: recording ? const Color(0xFFE53935) : TropaColors.orange,
+          backgroundColor: recording ? const Color(0xFFE53935) : Theme.of(context).colorScheme.secondary,
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(58),
         ),

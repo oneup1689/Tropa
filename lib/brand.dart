@@ -34,109 +34,77 @@ Color posterModeColor(TravelMode m) => switch (m) {
       TravelMode.mixed => const Color(0xFFFFD54F),
     };
 
-const Color brandGreen = Color(0xFF2E7D32);
+const Color brandGreen = Color(0xFF0E4D3A);
 const Color brandDeep = Color(0xFF0B3D2E);
 const Color brandAccent = Color(0xFFFF7043);
+const Color brandTerracotta = Color(0xFFC8553D);
+const Color brandSand = Color(0xFFF2E8CF);
+const Color brandNight = Color(0xFF071C2C);
 
-/// The Tropa logo: a green round badge with a peak, a zigzag trail up its face and an orange flag on the summit.
-/// Drawn in code (no image files), so it is sharp at any size. [size] is the diameter of the badge; with
-/// [badge] false only the peak, the trail and the flag are drawn (for use on a coloured background).
-void drawTropaLogo(Canvas c, Offset topLeft, double size, {bool badge = true, Color? mono}) {
+/// The Tropa mark: the letter t. Its crossbar is a path that crosses ours; the stem is our trail, which hooks and
+/// rises into the finish dot. Drawn in code (no image files), so it is sharp at any size.
+/// - [badge] true: a rounded square in the poster gradient (deep green to night) with the mark in sand and orange.
+/// - [badge] false: only the mark (for the adaptive icon foreground and for use on a dark background).
+/// - [mono]: a one-colour silhouette (status bar icons, Android 13 themed icon) in that colour.
+/// [size] is the side of the square the mark is fitted into; the mark fills [fill] of it (the Android adaptive
+/// icon needs it to stay within the central 66 %).
+void drawTropaLogo(Canvas c, Offset topLeft, double size, {bool badge = true, Color? mono, double fill = 0.62}) {
   final s = size;
   c.save();
   c.translate(topLeft.dx, topLeft.dy);
-  if (badge) {
-    c.drawCircle(
-      Offset(s / 2, s / 2),
-      s / 2,
-      Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(s, s), const [Color(0xFF3B8E5A), Color(0xFF0B3D2E)]),
+  if (badge && mono == null) {
+    final box = RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, s, s), Radius.circular(s * 0.22));
+    c.drawRRect(box, Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(s, s), const [brandGreen, brandNight]));
+    c.drawRRect(
+      box.deflate(s * 0.006),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = s * 0.012
+        ..color = const Color(0x2EF2E8CF),
     );
   }
+  Paint line(Color col, double w) => Paint()
+    ..color = col
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = w
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
   if (mono != null) {
-    // One-colour version (status bar icons): a solid peak with the trail cut out of it, and the flag.
-    c.saveLayer(Rect.fromLTWH(0, 0, s, s), Paint());
-    final solid = Path()
-      ..moveTo(s * 0.10, s * 0.82)
-      ..lineTo(s * 0.46, s * 0.26)
-      ..lineTo(s * 0.62, s * 0.50)
-      ..lineTo(s * 0.72, s * 0.38)
-      ..lineTo(s * 0.92, s * 0.82)
-      ..close();
-    c.drawPath(solid, Paint()..color = mono);
-    final cut = Path()
-      ..moveTo(s * 0.30, s * 0.80)
-      ..lineTo(s * 0.50, s * 0.66)
-      ..lineTo(s * 0.34, s * 0.56)
-      ..lineTo(s * 0.50, s * 0.46)
-      ..lineTo(s * 0.43, s * 0.36)
-      ..lineTo(s * 0.46, s * 0.27);
-    c.drawPath(
-      cut,
-      Paint()
-        ..blendMode = BlendMode.clear
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = s * 0.07
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round,
-    );
-    c.drawLine(
-      Offset(s * 0.46, s * 0.27),
-      Offset(s * 0.46, s * 0.10),
-      Paint()
-        ..color = mono
-        ..strokeWidth = s * 0.05
-        ..strokeCap = StrokeCap.round,
-    );
+    // t with a short hook ending in a dot; fits a box 76.5 x 81 units around (63.75, 48).
+    final k = s * fill / 81;
+    c.translate(s / 2, s / 2);
+    c.scale(k);
+    c.translate(-63.75, -48);
+    final p = Paint()..color = mono;
     c.drawPath(
       Path()
-        ..moveTo(s * 0.46, s * 0.10)
-        ..lineTo(s * 0.70, s * 0.18)
-        ..lineTo(s * 0.46, s * 0.26)
-        ..close(),
-      Paint()..color = mono,
+        ..moveTo(34, 40)
+        ..lineTo(68, 40)
+        ..moveTo(50, 16)
+        ..lineTo(50, 60)
+        ..arcToPoint(const Offset(70, 80), radius: const Radius.circular(20), clockwise: false),
+      line(mono, 17),
     );
-    c.restore();
+    c.drawCircle(const Offset(92, 80), 10, p);
     c.restore();
     return;
   }
-  final peak = Path()
-    ..moveTo(s * 0.14, s * 0.78)
-    ..lineTo(s * 0.46, s * 0.26)
-    ..lineTo(s * 0.62, s * 0.50)
-    ..lineTo(s * 0.72, s * 0.38)
-    ..lineTo(s * 0.88, s * 0.78)
-    ..close();
-  c.drawPath(peak, Paint()..color = const Color(0x55FFFFFF));
-  final zig = Path()
-    ..moveTo(s * 0.30, s * 0.78)
-    ..lineTo(s * 0.50, s * 0.66)
-    ..lineTo(s * 0.34, s * 0.56)
-    ..lineTo(s * 0.50, s * 0.46)
-    ..lineTo(s * 0.43, s * 0.36)
-    ..lineTo(s * 0.46, s * 0.27);
+  // The mark spans x 26..134.8 and y 8..88 in its own units; centre (80.4, 48).
+  final k = s * fill / 109;
+  c.translate(s / 2, s / 2);
+  c.scale(k);
+  c.translate(-80.4, -48);
+  const w = 16.0;
+  c.drawPath(Path()..moveTo(34, 40)..lineTo(68, 40), line(brandSand, w));
   c.drawPath(
-    zig,
-    Paint()
-      ..color = const Color(0xFFFFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = s * 0.045
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round,
+    Path()
+      ..moveTo(50, 16)
+      ..lineTo(50, 60)
+      ..arcToPoint(const Offset(70, 80), radius: const Radius.circular(20), clockwise: false)
+      ..cubicTo(92, 80, 92, 56, 114, 56),
+    line(brandSand, w),
   );
-  c.drawLine(
-    Offset(s * 0.46, s * 0.27),
-    Offset(s * 0.46, s * 0.12),
-    Paint()
-      ..color = const Color(0xFFFFFFFF)
-      ..strokeWidth = s * 0.03
-      ..strokeCap = StrokeCap.round,
-  );
-  final flag = Path()
-    ..moveTo(s * 0.46, s * 0.12)
-    ..lineTo(s * 0.64, s * 0.18)
-    ..lineTo(s * 0.46, s * 0.24)
-    ..close();
-  c.drawPath(flag, Paint()..color = brandAccent);
+  c.drawCircle(const Offset(122, 56), w * 0.8, Paint()..color = brandAccent);
   c.restore();
 }
 

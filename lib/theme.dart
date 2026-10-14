@@ -7,53 +7,58 @@ import 'brand.dart';
 class TropaColors {
   TropaColors._();
 
-  static const forest = Color(0xFF1F6B4A);
+  static const forest = Color(0xFF0E4D3A); // the poster gradient start: deep green
   static const forestDeep = Color(0xFF0B3D2E);
   static const mint = Color(0xFF6FD6A3);
   static const orange = Color(0xFFFF7043);
-  static const paper = Color(0xFFF6F8F4);
-  static const night = Color(0xFF0E1A17);
+  static const terracotta = Color(0xFFC8553D);
+  static const sand = Color(0xFFF2E8CF);
+  static const paper = Color(0xFFF6F1E3); // light theme "Earth": warm paper
+  static const night = Color(0xFF08211F); // dark theme "Night": between the poster gradient colours
 }
 
+/// Light theme "Earth": sand paper, deep-green text and actions, terracotta for the main call to action.
+/// Dark theme "Night": the poster palette, mint for actions, orange for the call to action.
 ColorScheme tropaScheme(Brightness b) {
-  final base = ColorScheme.fromSeed(seedColor: TropaColors.forest, brightness: b);
+  // The seed stays the old forest green so the derived tertiary (used for the healed track) does not shift.
+  final base = ColorScheme.fromSeed(seedColor: const Color(0xFF1F6B4A), brightness: b);
   if (b == Brightness.light) {
     return base.copyWith(
       primary: TropaColors.forest,
-      onPrimary: Colors.white,
-      primaryContainer: const Color(0xFFD3EEDD),
+      onPrimary: TropaColors.sand,
+      primaryContainer: const Color(0xFFD9E7D6),
       onPrimaryContainer: TropaColors.forestDeep,
-      secondary: TropaColors.orange,
+      secondary: TropaColors.terracotta,
       onSecondary: Colors.white,
-      secondaryContainer: const Color(0xFFFFE1D6),
+      secondaryContainer: const Color(0xFFF6DDD2),
       onSecondaryContainer: const Color(0xFF5A1C08),
       surface: TropaColors.paper,
-      onSurface: const Color(0xFF14201B),
-      surfaceContainerLowest: Colors.white,
-      surfaceContainerLow: const Color(0xFFEFF4EE),
-      surfaceContainer: const Color(0xFFE8EFE7),
-      surfaceContainerHigh: const Color(0xFFE1E9E0),
-      surfaceContainerHighest: const Color(0xFFDAE3D9),
-      outlineVariant: const Color(0xFFC9D6C9),
+      onSurface: const Color(0xFF1A2A22),
+      surfaceContainerLowest: const Color(0xFFFFFDF7),
+      surfaceContainerLow: const Color(0xFFFFFBF0),
+      surfaceContainer: const Color(0xFFF1EAD6),
+      surfaceContainerHigh: const Color(0xFFEAE1C8),
+      surfaceContainerHighest: const Color(0xFFE3D9BC),
+      outlineVariant: const Color(0xFFE0D5B2),
     );
   }
   return base.copyWith(
     primary: TropaColors.mint,
     onPrimary: const Color(0xFF00382A),
-    primaryContainer: const Color(0xFF17503B),
+    primaryContainer: const Color(0xFF14513F),
     onPrimaryContainer: const Color(0xFFBDF0D4),
-    secondary: const Color(0xFFFF8A65),
-    onSecondary: const Color(0xFF4A1503),
+    secondary: TropaColors.orange,
+    onSecondary: const Color(0xFF3A1100),
     secondaryContainer: const Color(0xFF6A2A14),
     onSecondaryContainer: const Color(0xFFFFDBCF),
     surface: TropaColors.night,
     onSurface: const Color(0xFFE3EBE6),
-    surfaceContainerLowest: const Color(0xFF0A1412),
-    surfaceContainerLow: const Color(0xFF14231F),
-    surfaceContainer: const Color(0xFF182A25),
-    surfaceContainerHigh: const Color(0xFF1E332D),
-    surfaceContainerHighest: const Color(0xFF254039),
-    outlineVariant: const Color(0xFF2E4A41),
+    surfaceContainerLowest: const Color(0xFF061817),
+    surfaceContainerLow: const Color(0xFF0F302B),
+    surfaceContainer: const Color(0xFF133A34),
+    surfaceContainerHigh: const Color(0xFF184540),
+    surfaceContainerHighest: const Color(0xFF1F524A),
+    outlineVariant: const Color(0xFF26584B),
   );
 }
 
