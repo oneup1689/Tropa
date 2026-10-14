@@ -63,3 +63,6 @@ data/
 # Personal test data lives in the private repo tropa-testdata
 test/*.jpeg
 test/*.jpg
+
+# Design experiments (logo lab, sketches): local only
+logo_lab/
