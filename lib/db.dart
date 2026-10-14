@@ -368,6 +368,11 @@ class TrackDb {
     return [for (final r in rows) (lat: (r['lat'] as num).toDouble(), lon: (r['lon'] as num).toDouble())];
   }
 
+  Future<void> renameRoute(int id, String name) async {
+    final db = await database;
+    await db.update('routes', {'name': name}, where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> deleteRoute(int id) async {
     final db = await database;
     await db.delete('route_points', where: 'route_id = ?', whereArgs: [id]);

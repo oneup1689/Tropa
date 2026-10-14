@@ -9,7 +9,7 @@ import 'map_page.dart';
 import 'settings_page.dart';
 import 'splash.dart';
 
-/// The frame of the app: the bottom navigation (History, Map, Settings), the night gradient behind the tabs in the
+/// The frame of the app: the bottom navigation (Trails, Map, Settings), the night gradient behind the tabs in the
 /// dark theme and, on a cold start, the animated splash screen on top. Maps, routes, the backup and the log are in
 /// Settings → Data; the planner is on the start card.
 class AppShell extends StatefulWidget {
@@ -74,15 +74,15 @@ class _AppShellState extends State<AppShell> {
           if (i == 1) _mapOpened = true;
         }),
         destinations: [
-          NavigationDestination(icon: const Icon(Icons.route_outlined), selectedIcon: const Icon(Icons.route), label: t('История')),
+          NavigationDestination(icon: const Icon(Icons.route_outlined), selectedIcon: const Icon(Icons.route), label: t('Тропы')),
           NavigationDestination(icon: const Icon(Icons.map_outlined), selectedIcon: const Icon(Icons.map), label: t('Карта')),
           NavigationDestination(icon: const Icon(Icons.tune), selectedIcon: const Icon(Icons.tune), label: t('Настройки')),
         ],
       ),
     );
     final framed = PopScope(
-      // "Back" from another tab returns to the walks first.
-      canPop: _index == 0,
+      // "Back" from another tab returns to History; History is a dead end for "Back" (only the Home button leaves the app).
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _index != 0) setState(() => _index = 0);
       },

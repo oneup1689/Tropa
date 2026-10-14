@@ -8,16 +8,17 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'maps.dart';
 import 'modes.dart';
+import 'recorder.dart';
 import 'settings.dart';
 import 'l10n.dart';
 
-/// Trip planner: a reminder (and optionally an automatic start of the recording) at a chosen time,
+/// Auto-record: recording that starts by itself when the person starts moving (24/7), and the planner: a reminder (and optionally an automatic start of the recording) at a chosen time,
 /// plus a readiness checklist so nothing is forgotten before leaving.
-class PlannerPage extends StatefulWidget {
-  const PlannerPage({super.key});
+class AutoRecordPage extends StatefulWidget {
+  const AutoRecordPage({super.key});
 
   @override
-  State<PlannerPage> createState() => _PlannerPageState();
+  State<AutoRecordPage> createState() => _AutoRecordPageState();
 }
 
 class _PlannedTrip {
@@ -49,7 +50,7 @@ class _Check {
   _Check(this.label, this.ok, {this.hint, this.fix});
 }
 
-class _PlannerPageState extends State<PlannerPage> {
+class _AutoRecordPageState extends State<AutoRecordPage> {
   static const _sys = MethodChannel('tropa/system');
   List<_PlannedTrip> trips = [];
   List<_Check> checks = [];
@@ -191,13 +192,31 @@ class _PlannerPageState extends State<PlannerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(t('Планировщик'))),
+      appBar: AppBar(title: Text(t('Автозапись'))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _add,
         icon: const Icon(Icons.add_alarm),
         label: Text(t('Запланировать')),
       ),
       body: ListView(padding: const EdgeInsets.all(16), children: [
+        // Two ways to record without pressing the button: when the person starts moving (24/7), and at a set time.
+        ListenableBuilder(
+          listenable: AppSettings.instance,
+          builder: (context, _) => Card(
+            child: SwitchListTile(
+              secondary: const Icon(Icons.motion_photos_auto_outlined),
+              title: Text(t('Писать сам, когда начну двигаться')),
+              subtitle: Text(t(
+                  'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. В остальное время GPS выключен и батарея почти не тратится.')),
+              value: AppSettings.instance.autoMode,
+              onChanged: (v) async {
+                await AppSettings.instance.set('auto_mode', v);
+                await Recorder.instance.applyAutoMode();
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
         Text(t('Готовность к прогулке'), style: Theme.of(context).textTheme.titleMedium),
         for (final c in checks)
           ListTile(

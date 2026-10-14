@@ -45,3 +45,34 @@ ParsedRoute? parseGpx(String xml, {String fallbackName = 'Маршрут'}) {
   }
   return ParsedRoute(name ?? fallbackName, pts);
 }
+
+/// A route as a GPX document (a single track, no times): what "Share GPX" of a saved route sends.
+String routeToGpx(String name, List<({double lat, double lon})> points) {
+  String esc(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  final b = StringBuffer()
+    ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
+    ..writeln('<gpx version="1.1" creator="Tropa" xmlns="http://www.topografix.com/GPX/1/1">')
+    ..writeln('<trk><name>${esc(name)}</name><trkseg>');
+  for (final p in points) {
+    b.writeln('<trkpt lat="${p.lat.toStringAsFixed(7)}" lon="${p.lon.toStringAsFixed(7)}"></trkpt>');
+  }
+  b
+    ..writeln('</trkseg></trk>')
+    ..writeln('</gpx>');
+  return b.toString();
+}
+
+/// Thins a recorded track to a route: points about [stepM] metres apart (always keeping the first and the last), so
+/// a saved route is light and its navigation is not confused by GPS jitter.
+List<({double lat, double lon})> thinToRoute(List<({double lat, double lon})> pts, {double stepM = 10}) {
+  if (pts.length < 3) return pts;
+  final out = [pts.first];
+  for (var i = 1; i < pts.length - 1; i++) {
+    final a = out.last, b = pts[i];
+    final dy = (b.lat - a.lat) * 111320;
+    final dx = (b.lon - a.lon) * 111320 * 0.94; // good enough between points metres apart, at 10-30 degrees of latitude
+    if (dx * dx + dy * dy >= stepM * stepM) out.add(b);
+  }
+  out.add(pts.last);
+  return out;
+}

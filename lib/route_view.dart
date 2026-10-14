@@ -14,6 +14,7 @@ import 'map_page.dart';
 import 'modes.dart';
 import 'notes.dart';
 import 'poster_page.dart';
+import 'routes.dart';
 import 'segments.dart';
 import 'settings.dart';
 import 'stats.dart';
@@ -173,16 +174,32 @@ class _RouteViewPageState extends State<RouteViewPage> {
               _rename();
             case 'mode':
               _changeMode();
+            case 'route':
+              _saveAsRoute();
             case 'delete':
               _delete();
           }
         },
         itemBuilder: (_) => [
+          PopupMenuItem(value: 'route', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Сохранить как маршрут')), dense: true)),
           PopupMenuItem(value: 'rename', child: ListTile(leading: const Icon(Icons.edit_outlined), title: Text(t('Переименовать')), dense: true)),
           PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Изменить режим')), dense: true)),
           PopupMenuItem(value: 'delete', child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(t('Удалить')), dense: true)),
         ],
       );
+
+  /// Copies the walk to the saved routes (thinned to a point every ~10 m), to walk it again with navigation.
+  Future<void> _saveAsRoute() async {
+    final pts = await TrackDb.instance.points(widget.sessionId);
+    if (pts.length < 2) {
+      _snack(t('Недостаточно точек'));
+      return;
+    }
+    final route = thinToRoute([for (final p in pts) (lat: p.lat, lon: p.lon)]);
+    final name = _title.trim().isEmpty ? widget.title : _title;
+    await TrackDb.instance.addRoute(name, route);
+    _snack(t('Сохранено в «Тропы → Маршруты»: {p0} ({p1} точек)', {'p0': name, 'p1': route.length}));
+  }
 
   Future<void> _rename() async {
     final name = await showDialog<String>(context: context, builder: (_) => _RenameDialog(initial: _title));

@@ -97,12 +97,10 @@ adb shell "run-as $pkg cp /data/local/tmp/tropa.db databases/tropa.db"
 adb shell "run-as $pkg rm -f databases/tropa.db-wal databases/tropa.db-shm"
 adb shell am start -n "$pkg/.MainActivity" | Out-Null
 Start-Sleep 30
-TapLabel "^Settings" | Out-Null   # since v26 the routes live in Settings -> Data (bottom of the list)
+TapLabel "^Routes" | Out-Null   # since v26.1 the routes are the "Routes" switch of the Trails tab
 Start-Sleep 2
-1..4 | ForEach-Object { adb shell input swipe 540 1900 540 500 300 | Out-Null; Start-Sleep -Milliseconds 600 }
-TapLabel "^Routes" | Out-Null
+TapLabel "^Follow the route" | Out-Null   # the first (only) route of the list
 Start-Sleep 3
-Tap 337 727    # Follow the route (first route in the list)
 Start-Sleep 5
 adb emu geo fix 105.8560 21.0300 | Out-Null
 Start-Sleep 3

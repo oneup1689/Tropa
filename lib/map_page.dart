@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'brand.dart';
 import 'db.dart';
@@ -114,6 +115,8 @@ class _MapPageState extends State<MapPage> {
   LatLng? _here;
   double _bearing = 0;
   bool _hasBearing = false;
+  final GlobalKey _mapKey = GlobalKey();
+  bool _sharing = false; // a snapshot of the map is being made for sharing
 
   @override
   void initState() {
@@ -524,6 +527,190 @@ class _MapPageState extends State<MapPage> {
     return LatLngBounds(southwest: LatLng(minLat, minLon), northeast: LatLng(maxLat, maxLon));
   }
 
+  /// The map of a finished walk or of a route (not the live map, not the tab): it can be shared and fitted to the route.
+  bool get _shareable =>
+      (widget.sessionId != null || widget.routeId != null) && widget.posterCapture == null && !widget.live && !widget.tab && _stylePath != null;
+
+  /// "Whole route": the camera shows the entire walk or route again after the person moved the map around.
+  Future<void> _fitAll() async {
+    final b = _bounds(_overlay?.bounds ?? const []);
+    if (b != null) await _controller?.animateCamera(CameraUpdate.newLatLngBounds(b, left: 40, right: 40, top: 60, bottom: 60));
+  }
+
+  /// "Share the map as you see it": a snapshot of the map at the current camera with the route drawn on it in code, the
+  /// Tropa mark and the map attribution on top, shared as a picture.
+  Future<void> _shareMap() async {
+    final c = _controller;
+    final box = _mapKey.currentContext?.findRenderObject() as RenderBox?;
+    final region = _region;
+    final cam = c?.cameraPosition;
+    if (c == null || box == null || region == null || cam == null || _sharing) return;
+    setState(() => _sharing = true);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final ratio = MediaQuery.of(context).devicePixelRatio;
+    final startZoom = cam.zoom;
+    final startTarget = cam.target;
+    try {
+      final size = box.size;
+      final pxW = (size.width * ratio).round(), pxH = (size.height * ratio).round();
+      // The snapshotter hangs on a style with our route layers, so it takes the bare map (as for the posters) and the
+      // route is drawn on it in code. The bare style is written to the same file for the moment, then restored.
+      await MapStore.writeStyleWithOverlay(region, dark: dark, sources: const {}, layers: const []);
+      // Same extent as on the screen, in the pixels of the phone: the zoom grows by log2(pixel ratio).
+      final shotZoom = startZoom + math.log(ratio) / math.ln2;
+      await c.moveCamera(CameraUpdate.newLatLngZoom(startTarget, shotZoom));
+      await Future<void>.delayed(const Duration(milliseconds: 1800)); // tiles of the new zoom
+      final png = await c.takeSnapshot(width: pxW, height: pxH).timeout(const Duration(seconds: 40));
+      final img = (await (await ui.instantiateImageCodec(png)).getNextFrame()).image;
+      final snapScale = img.width / pxW; // the snapshotter may have used its own pixel ratio
+      final capture = MapCapture(png, startTarget.latitude, startTarget.longitude, shotZoom + math.log(snapScale) / math.ln2, img.width, img.height);
+      final proj = mapProjection(capture, img.width.toDouble());
+      // The snapshotter stamps its own logo and a short attribution on the bottom edge: that strip is cut off (ours replaces it).
+      final cropped = (80 * snapScale).round();
+      final w = img.width.toDouble(), h = (img.height - cropped).toDouble();
+      final k = ratio * snapScale; // one logical pixel of the screen in picture pixels (the plate is drawn in these)
+      final rec = ui.PictureRecorder();
+      final cv = Canvas(rec);
+      cv.drawImageRect(img, Rect.fromLTWH(0, 0, w, h), Rect.fromLTWH(0, 0, w, h), Paint());
+      _drawOverlayOnSnapshot(cv, proj, k);
+
+      // The mark of the app and, if the walk has a name, the name: a dark plate in the lower left corner.
+      final caption = widget.title.trim();
+      final name = headingStyle(17 * k, weight: 700);
+      final sub = bodyStyle(12.5 * k, color: const Color(0xFFCFD8DC));
+      final logo = 40 * k, pad = 10 * k;
+      final textW = math.max(textWidth('Tropa', name), caption.isEmpty ? 0.0 : math.min(textWidth(caption, sub), w * 0.5));
+      final plate = Rect.fromLTWH(14 * k, h - 14 * k - (logo + 2 * pad), pad + logo + 10 * k + textW + pad, logo + 2 * pad);
+      cv.drawRRect(RRect.fromRectAndRadius(plate, Radius.circular(16 * k)), Paint()..color = const Color(0xD9071C2C));
+      drawTropaLogo(cv, Offset(plate.left + pad, plate.top + pad), logo);
+      final tx = plate.left + pad + logo + 10 * k;
+      drawText(cv, 'Tropa', Offset(tx, plate.top + pad + (caption.isEmpty ? 8 * k : 0)), name);
+      if (caption.isNotEmpty) drawText(cv, caption, Offset(tx, plate.top + pad + 22 * k), sub, maxWidth: w * 0.5, maxLines: 1);
+
+      // The data of the map must be credited on every picture of it.
+      final credit = bodyStyle(10.5 * k, color: const Color(0xFFFFFFFF));
+      const creditText = '© OpenStreetMap · Protomaps';
+      final cw = textWidth(creditText, credit);
+      final box2 = Rect.fromLTWH(w - 14 * k - cw - 16 * k, h - 14 * k - 22 * k, cw + 16 * k, 22 * k);
+      cv.drawRRect(RRect.fromRectAndRadius(box2, Radius.circular(11 * k)), Paint()..color = const Color(0xA6000000));
+      drawText(cv, creditText, Offset(box2.left + 8 * k, box2.top + 3 * k), credit);
+
+      final out = await rec.endRecording().toImage(img.width, h.round());
+      final data = await out.toByteData(format: ui.ImageByteFormat.png);
+      final file = await writePoster(data!.buffer.asUint8List(), 'tropa_map_${widget.sessionId ?? widget.routeId}_${DateTime.now().millisecondsSinceEpoch ~/ 1000}');
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Tropa'));
+    } catch (e, st) {
+      DebugLog.instance.log('MAP', 'share map failed: $e\n$st');
+      _say(t('Не удалось поделиться картой: {p0}', {'p0': e}));
+    } finally {
+      // Back to the map the person was looking at: the full style (route layers) and the same camera.
+      try {
+        final ov = _overlay;
+        if (ov != null) await _writeFullStyle(region, ov, dark);
+        await c.moveCamera(CameraUpdate.newLatLngZoom(startTarget, startZoom));
+      } catch (e) {
+        DebugLog.instance.log('MAP', 'restoring the map after sharing failed: $e');
+      }
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
+
+  /// The style with the route layers (what the map screen shows), written to the active style file.
+  Future<String> _writeFullStyle(MapRegion region, _Overlay overlay, bool dark) => MapStore.writeStyleWithOverlay(
+        region,
+        dark: dark,
+        sources: {
+          for (final (id, fc) in [
+            ('route', overlay.route),
+            ('track', overlay.track),
+            ('restored', overlay.restored),
+            ('gaps', overlay.gaps),
+            ('marks', overlay.marks),
+            ('me', _fc(const [])),
+            ('locator', _fc(const [])),
+          ])
+            id: {'type': 'geojson', 'data': fc},
+        },
+        layers: _overlayLayers(),
+      );
+
+  /// Draws the route, the restored and broken gaps, the way-of-travel colours and the note markers (the GeoJSON of the
+  /// map screen) over a snapshot of the bare map. [k] = picture pixels per logical pixel, so lines look as on the screen.
+  void _drawOverlayOnSnapshot(Canvas cv, Offset Function(double lat, double lon) proj, double k) {
+    final ov = _overlay;
+    if (ov == null) return;
+    Color hex(Object? v, Color fallback) {
+      final s = v is String ? v : '';
+      if (s.length == 7 && s.startsWith('#')) {
+        final n = int.tryParse(s.substring(1), radix: 16);
+        if (n != null) return Color(0xFF000000 | n);
+      }
+      return fallback;
+    }
+
+    Iterable<Map<String, Object?>> features(Map<String, Object?> fc) => [
+          for (final f in (fc['features'] as List? ?? const [])) (f as Map).cast<String, Object?>(),
+        ];
+    void lines(Map<String, Object?> fc, Color color, double width, {double opacity = 1}) {
+      for (final f in features(fc)) {
+        final g = (f['geometry'] as Map).cast<String, Object?>();
+        if (g['type'] != 'LineString') continue;
+        final coords = (g['coordinates'] as List).cast<List>();
+        if (coords.length < 2) continue;
+        final path = Path();
+        for (var i = 0; i < coords.length; i++) {
+          final o = proj((coords[i][1] as num).toDouble(), (coords[i][0] as num).toDouble());
+          if (i == 0) {
+            path.moveTo(o.dx, o.dy);
+          } else {
+            path.lineTo(o.dx, o.dy);
+          }
+        }
+        final props = (f['properties'] as Map?)?.cast<String, Object?>() ?? const {};
+        cv.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..strokeWidth = width * k
+            ..color = hex(props['color'], color).withValues(alpha: opacity),
+        );
+      }
+    }
+
+    lines(ov.route, const Color(0xFF1E88E5), 5, opacity: 0.85);
+    lines(ov.gaps, const Color(0xFFE53935), 1.5, opacity: 0.4);
+    lines(ov.track, const Color(0xFFE53935), 4.5);
+    lines(ov.restored, const Color(0xFFFB8C00), 4.5);
+    final labelBoxes = <Rect>[];
+    for (final f in features(ov.marks)) {
+      final g = (f['geometry'] as Map).cast<String, Object?>();
+      final c = (g['coordinates'] as List);
+      final at = proj((c[1] as num).toDouble(), (c[0] as num).toDouble());
+      final props = (f['properties'] as Map).cast<String, Object?>();
+      final r = ((props['r'] as num?) ?? 8).toDouble() * k;
+      cv.drawCircle(at, r + 2 * k, Paint()..color = const Color(0xFFFFFFFF));
+      cv.drawCircle(at, r, Paint()..color = hex(props['color'], const Color(0xFFE53935)));
+      final label = (props['label'] as String?) ?? '';
+      if (label.isNotEmpty) {
+        final style = TextStyle(fontFamily: bodyFont, fontSize: 12 * k, color: const Color(0xFF4A148C), fontWeight: FontWeight.w600);
+        final halo = TextStyle(fontFamily: bodyFont, fontSize: 12 * k, fontWeight: FontWeight.w600, foreground: Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3 * k
+          ..color = const Color(0xFFFFFFFF));
+        final tp = TextPainter(text: TextSpan(text: label, style: style), textDirection: TextDirection.ltr)..layout(maxWidth: 130 * k);
+        final tpHalo = TextPainter(text: TextSpan(text: label, style: halo), textDirection: TextDirection.ltr)..layout(maxWidth: 130 * k);
+        final pos = at + Offset(-tp.width / 2, r + 4 * k);
+        final box = (pos & tp.size).inflate(2 * k);
+        if (labelBoxes.any((b) => b.overlaps(box))) continue; // two notes in one place: the first one is enough
+        labelBoxes.add(box);
+        tpHalo.paint(cv, pos);
+        tp.paint(cv, pos);
+      }
+    }
+  }
+
   Future<void> _onStyleLoaded() async {
     final c = _controller;
     if (c == null) return;
@@ -638,6 +825,14 @@ class _MapPageState extends State<MapPage> {
       appBar: AppBar(
         title: Text(widget.title.isEmpty ? t('Карта') : widget.title),
         actions: [
+          if (_shareable)
+            IconButton(
+              icon: _sharing
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.ios_share),
+              tooltip: t('Поделиться картой'),
+              onPressed: _sharing ? null : _shareMap,
+            ),
           if (widget.sessionId != null && _stylePath != null && widget.posterCapture == null)
             IconButton(
               icon: const Icon(Icons.image_outlined),
@@ -681,16 +876,36 @@ class _MapPageState extends State<MapPage> {
                   ),
                 )
               : Stack(children: [
-                  MapLibreMap(
-                    styleString: _stylePath!,
-                    initialCameraPosition: CameraPosition(target: _initial ?? const LatLng(20, 106), zoom: _zoom),
-                    onMapCreated: (c) => _controller = c,
-                    onStyleLoadedCallback: _onStyleLoaded,
-                    compassEnabled: true,
-                    myLocationEnabled: false,
-                    trackCameraPosition: widget.tab,
-                    attributionButtonPosition: AttributionButtonPosition.bottomLeft,
+                  Positioned.fill(
+                    child: KeyedSubtree(
+                      key: _mapKey,
+                      child: MapLibreMap(
+                        styleString: _stylePath!,
+                        initialCameraPosition: CameraPosition(target: _initial ?? const LatLng(20, 106), zoom: _zoom),
+                        onMapCreated: (c) => _controller = c,
+                        onStyleLoadedCallback: _onStyleLoaded,
+                        compassEnabled: true,
+                        myLocationEnabled: false,
+                        trackCameraPosition: true, // the share button needs the camera
+                        attributionButtonPosition: AttributionButtonPosition.bottomLeft,
+                      ),
+                    ),
                   ),
+                  if (_sharing)
+                    const Positioned.fill(
+                      child: ColoredBox(color: Color(0x99000000), child: Center(child: CircularProgressIndicator())),
+                    ),
+                  if (_shareable)
+                    Positioned(
+                      right: 12,
+                      bottom: 28,
+                      child: FloatingActionButton.extended(
+                        heroTag: 'map-fit',
+                        onPressed: _fitAll,
+                        icon: const Icon(Icons.zoom_out_map),
+                        label: Text(t('Весь маршрут')),
+                      ),
+                    ),
                   if (widget.tab)
                     Positioned(
                       right: 12,

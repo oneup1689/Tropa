@@ -9,27 +9,17 @@ import 'backup.dart';
 import 'debug_log.dart';
 import 'l10n.dart';
 import 'maps_page.dart';
-import 'planner_page.dart';
+import 'auto_record_page.dart';
 import 'recorder.dart';
-import 'routes_page.dart';
 import 'settings.dart';
 
-/// Settings → Data: maps, imported routes, backup and the debug log (they used to live in the "three dots" menu
+/// Settings → Data: maps, backup and the debug log (they used to live in the "three dots" menu
 /// of the walks screen).
 class DataSection extends StatelessWidget {
   const DataSection({super.key});
 
   void _snack(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
-  Future<void> _openRoutes(BuildContext context) async {
-    final nav = Navigator.of(context);
-    final routeId = await nav.push<int>(MaterialPageRoute(builder: (_) => RoutesPage()));
-    if (routeId == null) return;
-    // "Go along this route" starts the recording on the History tab.
-    AppHooks.selectTab?.call(0);
-    await AppHooks.startAlongRoute?.call(routeId);
   }
 
   Future<void> _backup(BuildContext context) async {
@@ -122,8 +112,6 @@ class DataSection extends StatelessWidget {
       child: Column(children: [
         tile(Icons.download_for_offline_outlined, t('Карты'), t('Скачать, обновить или удалить карты регионов'),
             () => Navigator.push(context, MaterialPageRoute(builder: (_) => MapsPage()))),
-        tile(Icons.alt_route, t('Маршруты (импорт GPX)'), t('Готовые маршруты, по которым можно идти с записью'),
-            () => _openRoutes(context)),
         tile(Icons.backup_outlined, t('Резервная копия'), t('Сохранить все прогулки и заметки в один файл'), () => _backup(context)),
         tile(Icons.restore, t('Восстановить из копии'), t('Вернуть прогулки из файла копии, без дублей'), () => _restore(context)),
         tile(Icons.bug_report_outlined, t('Отправить лог отладки'), t('Файл для разбора, если запись вела себя странно'), _shareLog),
@@ -137,19 +125,23 @@ class DataSection extends StatelessWidget {
     );
   }
 }
-
-/// A row for the "Automatic recording" group: the planner of future walks.
-class PlannerTile extends StatelessWidget {
-  const PlannerTile({super.key});
+/// The row of the "Automatic recording" group: opens the Auto-record screen (24/7 and the planner).
+class AutoRecordTile extends StatelessWidget {
+  const AutoRecordTile({super.key});
 
   @override
-  Widget build(BuildContext context) => Card(
-        child: ListTile(
-          leading: const Icon(Icons.event_available_outlined),
-          title: Text(t('Планировщик')),
-          subtitle: Text(t('Напоминание или автозапуск записи в нужное время')),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PlannerPage())),
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: AppSettings.instance,
+        builder: (context, _) => Card(
+          child: ListTile(
+            leading: const Icon(Icons.motion_photos_auto_outlined),
+            title: Text(t('Автозапись')),
+            subtitle: Text(AppSettings.instance.autoMode
+                ? t('Включена: запись начнётся сама, когда вы пойдёте. Там же планировщик.')
+                : t('Запись сама, когда вы пойдёте, или в заданное время')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AutoRecordPage())),
+          ),
         ),
       );
 }

@@ -29,10 +29,15 @@ class SettingsPage extends StatelessWidget {
       listenable: s,
       builder: (context, _) {
         final english = L10n.current == AppLang.en;
-        final visible = settingDefs.where((d) => (s.pro || !d.proOnly) && (english || !d.englishOnly)).toList();
+        final visible = settingDefs.where((d) => d.key != 'auto_mode' && (s.pro || !d.proOnly) && (english || !d.englishOnly)).toList();
         final sections = <String>[];
         for (final d in visible) {
           if (!sections.contains(d.section)) sections.add(d.section);
+        }
+        // The Auto-record row is always there, even when the group has no setting of its own (amateur mode).
+        if (!sections.contains('Автоматическая запись')) {
+          final at = sections.indexOf('Запись');
+          sections.insert(at < 0 ? sections.length : at, 'Автоматическая запись');
         }
         return Scaffold(
           appBar: AppBar(title: Text(t('Настройки'))),
@@ -78,7 +83,7 @@ class SettingsPage extends StatelessWidget {
                     for (final d in visible.where((d) => d.section == section)) _tile(context, s, d),
                   ]),
                 ),
-                if (section == 'Автоматическая запись') const PlannerTile(),
+                if (section == 'Автоматическая запись') const AutoRecordTile(),
               ],
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 22, 4, 6),

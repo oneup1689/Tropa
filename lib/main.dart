@@ -19,10 +19,11 @@ import 'l10n.dart';
 import 'map_page.dart';
 import 'modes.dart';
 import 'notes.dart';
-import 'planner_page.dart';
+import 'auto_record_page.dart';
 import 'readiness.dart';
 import 'recorder.dart';
 import 'route_view.dart';
+import 'routes_section.dart';
 import 'settings.dart';
 import 'stats.dart';
 import 'theme.dart';
@@ -117,6 +118,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool? _lastGps;
   double _weekM = 0; // distance and number of the walks of the last 7 days (idle start card)
   int _weekN = 0;
+  int _section = 0; // the Trails tab: 0 walked, 1 routes
+  List<RouteInfo> routes = [];
 
   @override
   void initState() {
@@ -182,7 +185,13 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _reload() async {
     final s = await TrackDb.instance.sessions();
-    if (mounted) setState(() => sessions = s);
+    final r = await TrackDb.instance.routes();
+    if (mounted) {
+      setState(() {
+        sessions = s;
+        routes = r;
+      });
+    }
     await _recomputeWeek();
   }
 
@@ -353,7 +362,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Widget _scaffold(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
@@ -369,19 +377,22 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ..._banners(context),
           _recordCard(context),
           SizedBox(height: 22),
-          Row(children: [
-            Text(t('История'), style: Theme.of(context).textTheme.titleLarge),
-            SizedBox(width: 8),
-            if (sessions.isNotEmpty)
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-                decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(20)),
-                child: Text('${sessions.length}', style: Theme.of(context).textTheme.labelMedium?.copyWith(color: cs.onPrimaryContainer)),
-              ),
-          ]),
-          SizedBox(height: 6),
-          if (sessions.isEmpty) _emptyState(context),
-          for (final s in sessions) _sessionCard(context, s),
+          // Trails: what was walked (the history, for posters) and routes (for walking again, with navigation).
+          SegmentedButton<int>(
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(value: 0, icon: const Icon(Icons.history), label: Text('${t('Пройденные')}${sessions.isEmpty ? '' : ' ${sessions.length}'}')),
+              ButtonSegment(value: 1, icon: const Icon(Icons.alt_route), label: Text('${t('Маршруты')}${routes.isEmpty ? '' : ' ${routes.length}'}')),
+            ],
+            selected: {_section},
+            onSelectionChanged: (v) => setState(() => _section = v.first),
+          ),
+          SizedBox(height: 10),
+          if (_section == 0) ...[
+            if (sessions.isEmpty) _emptyState(context),
+            for (final s in sessions) _sessionCard(context, s),
+          ] else
+            RoutesSection(routes: routes, onChanged: _reload, onFollow: startAlongRoute),
         ],
       ),
     );
@@ -625,21 +636,29 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // ------------------------------------------------------------------ distance goal
 
-  /// A round flag button next to the record button: opens the goal sheet; shows the goal once it is set.
-  /// Schedule a future walk (a reminder or an automatic start), in the corner of the start card.
+  /// The corner of the start card: the Auto-record screen (24/7 and the planner), with a small "24/7" mark while the
+  /// automatic recording is on, so that an always-on mode is visible without opening the settings.
   Widget _plannerButton() => Tooltip(
-        message: t('Планировщик'),
+        message: t('Автозапись'),
         child: GestureDetector(
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PlannerPage())),
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AutoRecordPage())),
           child: Container(
-            width: 40,
             height: 40,
-            decoration: const BoxDecoration(color: Color(0x26FFFFFF), shape: BoxShape.circle),
-            child: const Icon(Icons.event_available_outlined, size: 21, color: Colors.white),
+            padding: EdgeInsets.symmetric(horizontal: AppSettings.instance.autoMode ? 12 : 0),
+            constraints: const BoxConstraints(minWidth: 40),
+            decoration: BoxDecoration(color: const Color(0x26FFFFFF), borderRadius: BorderRadius.circular(20)),
+            child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.event_available_outlined, size: 21, color: Colors.white),
+              if (AppSettings.instance.autoMode) ...[
+                const SizedBox(width: 6),
+                const Text('24/7', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+              ],
+            ]),
           ),
         ),
       );
 
+  /// A round flag button next to the record button: opens the goal sheet; shows the goal once it is set.
   Widget _goalButton() {
     final goal = rec.activeGoalM;
     final set = goal > 0;

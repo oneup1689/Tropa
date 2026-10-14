@@ -515,4 +515,23 @@ const Map<String, String> enStrings = {
   'Способы движения с дистанцией и скоростью': 'Ways of travel with distance and speed',
   'Рисую постер…': 'Drawing the poster…',
   'Это займёт несколько секунд': 'It takes a few seconds',
+  // v26.1: Trails tab, Auto-record, map sharing
+  'Тропы': 'Trails',
+  'Пройденные': 'Walked',
+  'Автозапись': 'Auto-record',
+  'Писать сам, когда начну двигаться': 'Record by itself when I start moving',
+  'Включена: запись начнётся сама, когда вы пойдёте. Там же планировщик.': 'On: recording starts by itself when you start walking. The planner is there too.',
+  'Запись сама, когда вы пойдёте, или в заданное время': 'Recording by itself when you start walking, or at a set time',
+  'Маршруты, по которым можно идти заново: файл GPX или пройденная прогулка. Во время записи приложение предупредит, если вы сойдёте с маршрута.':
+      'Routes to walk again: a GPX file or a walk you have recorded. While recording, the app warns you if you leave the route.',
+  'Пока нет маршрутов': 'No routes yet',
+  'Импортируйте GPX или откройте пройденную прогулку и выберите «Сохранить как маршрут».': 'Import a GPX file, or open a recorded walk and choose "Save as route".',
+  'Поделиться GPX': 'Share GPX',
+  'Удалить маршрут «{p0}»?': 'Delete the route "{p0}"?',
+  'Название маршрута': 'Route name',
+  'Сохранить как маршрут': 'Save as route',
+  'Сохранено в «Тропы → Маршруты»: {p0} ({p1} точек)': 'Saved to Trails → Routes: {p0} ({p1} points)',
+  'Поделиться картой': 'Share the map',
+  'Весь маршрут': 'Whole route',
+  'Не удалось поделиться картой: {p0}': 'Could not share the map: {p0}',
 };

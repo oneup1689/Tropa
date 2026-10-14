@@ -55,6 +55,8 @@ class _PosterPageState extends State<PosterPage> {
   bool _loading = true;
   bool _hasMap = false;
   bool _busy = false;
+  final ScrollController _scroll = ScrollController();
+  MapCapture? _buildMap; // the map snapshot of the poster being made, for the animation
   Uint8List? _png;
 
   bool get _pro => AppSettings.instance.pro;
@@ -81,6 +83,7 @@ class _PosterPageState extends State<PosterPage> {
 
   @override
   void dispose() {
+    _scroll.dispose();
     _title.dispose();
     _region.dispose();
     _water.dispose();
@@ -310,6 +313,7 @@ class _PosterPageState extends State<PosterPage> {
           ),
         );
         if (!mounted) return;
+        if (mounted) setState(() => _buildMap = map); // the animation shows the route on this map
         if (map == null) {
           _snack(t('Карты для этого места нет: постер сделан в стиле Tropa. Карты добавляются в разделе «Карты».'));
         }
@@ -327,11 +331,20 @@ class _PosterPageState extends State<PosterPage> {
       if (left > Duration.zero) await Future<void>.delayed(left);
       if (!mounted) return;
       setState(() => _png = png);
+      // Show the new poster: it sits at the top of the screen, the person pressed the button at the bottom.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scroll.hasClients) _scroll.animateTo(0, duration: const Duration(milliseconds: 500), curve: Curves.easeOutCubic);
+      });
     } catch (e, st) {
       DebugLog.instance.log('POSTER', 'compose failed: $e\n$st');
       _snack(t('Не удалось создать постер: {p0}', {'p0': e}));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _buildMap = null;
+        });
+      }
     }
   }
 
@@ -363,7 +376,7 @@ class _PosterPageState extends State<PosterPage> {
       appBar: AppBar(title: Text(t('Постер'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
+          : ListView(controller: _scroll, padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
               if (_pro) ...[
                 // The poster of several walks is a variant of this screen, not a separate menu item.
                 SegmentedButton<bool>(
@@ -542,7 +555,7 @@ class _PosterPageState extends State<PosterPage> {
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 500),
             child: _busy && _pts.length > 1
-                ? Material(key: const ValueKey("building"), child: PosterBuildOverlay(points: _pts))
+                ? Material(key: const ValueKey("building"), child: PosterBuildOverlay(points: _pts, map: _buildMap, wide: o.format == PosterFormat.horizontal))
                 : const SizedBox.shrink(key: ValueKey("idle")),
           ),
         ),
