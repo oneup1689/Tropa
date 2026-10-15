@@ -18,3 +18,9 @@
 ## Автопроверка записи на эмуляторе (с v18)
 `tools\emu_check.ps1` (+ `emu_add_route.py`): ставит debug-APK, стирает данные приложения, гоняет сценарии (запись, GPS выкл/вкл, убийство процесса и восстановление, остановка, уход с маршрута и возврат) и печатает PASS/FAIL по строкам лога. Запуск: `powershell -NoProfile -File tools\emu_check.ps1` при запущенном эмуляторе Pixel_5 (~6 мин). Тапы по фиксированным координатам Pixel_5 — при смене вёрстки поправить. Внимание: `>` в Windows PowerShell 5.1 портит бинарные файлы — БД забирать через `adb shell "run-as ... cat ... > /data/local/tmp/x"` и `adb pull`.
 Перед каждой сборкой — субагент `pre-build-check` (`.claude/agents/`): analyze, тесты, личные файлы в `git status`, переводы `t()`.
+
+## Добавлено в v28–v30
+- `emu_wait_start.ps1` — сценарий «ждать у старта» на эмуляторе (маршрут за 2 км, GPS подходит к старту, служба сама начинает запись); использует `emu_add_zroute.py` (Z-образный маршрут ~900 м у Ханоя 21.03, 105.856 в БД приложения).
+- `emu_add_two_routes.py` — два тестовых маршрута: «In-map» внутри региона `data\maps\testwalk.pmtiles` (границы 105.8–106.2 / 20.1–20.4) и «No-map» вне его (для проверки карты в экране маршрута и загрузки фрагмента). Карту положить на эмулятор: `adb push data\maps\testwalk.pmtiles /sdcard/Android/data/app.tropa.tropa/files/maps/` (в Git Bash задать `MSYS_NO_PATHCONV=1`, иначе `/sdcard` превращается в путь Git).
+- `analyze_gpx.py` — разбор записанной прогулки: `python -I tools\analyze_gpx.py test\tropa_N.gpx out.txt` (длина, время в движении/на месте, пропуски >40 с, скачки >60 м, скорости); вывод писать в файл (консоль cp1251 ломает юникод).
+- Ловушки эмулятора: скриншоты — `adb exec-out screencap -p > file.png` из Git Bash (в Windows PowerShell 5.1 `>` портит PNG); если все проверки `emu_check` падают — на эмуляторе завис systemui («Application Not Responding»), перезапустить его; `emu_check` нужен debug-APK (release не читается через `run-as`).
