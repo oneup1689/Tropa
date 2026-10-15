@@ -37,6 +37,7 @@ Future<Uint8List> composeWidePoster({
   WeatherInfo? weather,
   MapCapture? map,
   List<TrackNote> notes = const [],
+  Map<String, ui.Image> noteThumbs = const {},
   List<double>? altitude,
   bool altitudeFused = false,
   int scale = 2,
@@ -78,7 +79,7 @@ Future<Uint8List> composeWidePoster({
   final proj = useMap ? mapProjection(map, wideW) : fitProjection(pts, i0, i1, wideRouteArea);
   drawPosterRoute(c, o, pts, i0, i1, mode, colorScale, speeds, proj, useMap && !o.darkMap, lineScale: 0.72);
   drawPosterPeaks(c, o, pts, i0, i1, speeds, alt, proj, st.maxSpeedMs * 3.6, bounds: wideMapRect.deflate(14));
-  if (o.notes) drawNoteMarkers(c, notes, proj, labels: false, bounds: wideMapRect.deflate(14), scale: 0.9);
+  if (o.notes) drawNoteMarkers(c, notes, proj, labels: false, bounds: wideMapRect.deflate(14), scale: 0.9, thumbs: noteThumbs);
   drawDistanceScale(c, proj, pts[pts.length ~/ 2], Offset(wideMapRect.left + 36, wideMapRect.bottom - 36), light: useMap && !o.darkMap, maxLen: 190);
   if (colorScale.coloring != LineColoring.single) {
     // The colour scale sits on a dark plate in the corner of the map, so it reads on any map.

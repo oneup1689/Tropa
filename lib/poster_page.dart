@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
@@ -16,6 +17,7 @@ import 'map_downloads.dart';
 import 'l10n.dart';
 import 'units.dart';
 import 'maps.dart';
+import 'note_thumbs.dart';
 import 'pmtiles_extract.dart';
 import 'modes.dart';
 import 'multi_poster_page.dart';
@@ -48,6 +50,7 @@ class _PosterPageState extends State<PosterPage> {
   List<TrackPoint> _pts = const [];
   List<TrackSegment> _segments = const [];
   List<TrackNote> _notes = const [];
+  Map<String, ui.Image> _thumbs = const {}; // photos of the notes for the markers
   WeatherInfo? _weather;
   DemSamples? _dem;
   String _demStatus = '';
@@ -96,6 +99,7 @@ class _PosterPageState extends State<PosterPage> {
     final overrides = await db.segmentOverrides(widget.sessionId);
     final meta = await db.sessionMeta(widget.sessionId);
     final notes = await db.notes(widget.sessionId);
+    final thumbs = await loadNoteThumbs(notes);
     // The dark map is the main background; without a map for the place the Tropa style is used.
     final region = pts.isEmpty ? null : await MapStore.regionFor(pts.first.lat, pts.first.lon);
     if (!mounted) return;
@@ -104,6 +108,7 @@ class _PosterPageState extends State<PosterPage> {
       o.background = _hasMap ? PosterBackground.map : PosterBackground.tropa;
       _pts = pts;
       _notes = notes;
+      _thumbs = thumbs;
       _segments = buildSegments(pts, widget.mode, overrides: overrides);
       _title.text = _defaultTitle(pts);
       _region.text = (meta['region'] as String?) ?? '';
@@ -322,10 +327,10 @@ class _PosterPageState extends State<PosterPage> {
       final png = o.format == PosterFormat.horizontal
           ? await composeWidePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
-              altitude: _altitude, altitudeFused: _altitude != null)
+              noteThumbs: _thumbs, altitude: _altitude, altitudeFused: _altitude != null)
           : await composePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
-              altitude: _altitude, altitudeFused: _altitude != null);
+              noteThumbs: _thumbs, altitude: _altitude, altitudeFused: _altitude != null);
       // A quick poster still gets one full drawing of the route on screen.
       final left = const Duration(milliseconds: 2600) - DateTime.now().difference(started);
       if (left > Duration.zero) await Future<void>.delayed(left);

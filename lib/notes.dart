@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import 'db.dart';
 import 'debug_log.dart';
+import 'note_thumbs.dart';
 import 'recorder.dart';
 import 'l10n.dart';
 
@@ -33,6 +34,8 @@ Future<NoteMedia?> captureMedia({required bool video}) async {
       await Gal.putImage(shot.path, album: 'Tropa');
     }
     final name = p.basename(shot.path);
+    // A small copy stays in the app, so that the poster can show the photo in the marker of the note.
+    if (!video) await saveNoteThumb(shot.path, name);
     // The picker's temporary copy is no longer needed once the gallery has the file.
     try {
       await File(shot.path).delete();

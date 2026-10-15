@@ -104,6 +104,7 @@ Future<Uint8List> composePoster({
   WeatherInfo? weather,
   MapCapture? map,
   List<TrackNote> notes = const [],
+  Map<String, ui.Image> noteThumbs = const {},
   List<double>? altitude,
   bool altitudeFused = false,
   int scale = 2,
@@ -141,7 +142,8 @@ Future<Uint8List> composePoster({
   drawPosterPeaks(c, o, pts, i0, i1, speeds, alt, proj, st.maxSpeedMs * 3.6);
   drawDistanceScale(c, proj, pts[pts.length ~/ 2], const Offset(64, routeBottom - 6), light: useMap && !o.darkMap);
   if (o.notes) {
-    drawNoteMarkers(c, notes, proj, labels: true, bounds: const Rect.fromLTRB(24, offsetTop, posterW - 24, routeBottom + 40));
+    drawNoteMarkers(c, notes, proj,
+        labels: true, bounds: const Rect.fromLTRB(24, offsetTop, posterW - 24, routeBottom + 40), thumbs: noteThumbs);
   }
   _drawBottom(c, o, pts, segments, mode, st, alt, altitudeFused, weather, useMap, i0, i1, colorScale);
 
@@ -638,30 +640,52 @@ Future<File> writePoster(Uint8List png, String name) async {
 
 /// Numbered markers of the notes on the route. With [labels] the first words of the note are written
 /// next to its number (vertical poster); the horizontal poster lists the notes in a panel instead.
+/// A note with a photo ([thumbs], by media name) shows the photo in a bigger round marker, its number in a small badge.
 void drawNoteMarkers(Canvas c, List<TrackNote> notes, Projection proj,
-    {required bool labels, required Rect bounds, double scale = 1.0}) {
+    {required bool labels, required Rect bounds, double scale = 1.0, Map<String, ui.Image> thumbs = const {}}) {
   final taken = <Rect>[];
   var n = 0;
   final r = 21.0 * scale;
+  final rPhoto = 40.0 * scale;
   // Markers first (they are never moved), labels afterwards in the free space around them.
-  final spots = <(int, Offset, TrackNote)>[];
+  final spots = <(int, Offset, TrackNote, double)>[];
   for (final note in notes) {
     n++;
     final at = proj(note.lat, note.lon);
     if (!bounds.inflate(40).contains(at)) continue;
-    spots.add((n, at, note));
-    taken.add(Rect.fromCircle(center: at, radius: r + 6));
+    final rr = thumbs[note.mediaName] != null ? rPhoto : r;
+    spots.add((n, at, note, rr));
+    taken.add(Rect.fromCircle(center: at, radius: rr + 6));
   }
-  for (final (num, at, _) in spots) {
-    c.drawCircle(at.translate(0, 2), r + 3, Paint()..color = const Color(0x66000000));
-    c.drawCircle(at, r + 3, Paint()..color = const Color(0xFFFFFFFF));
-    c.drawCircle(at, r, Paint()..color = const Color(0xFFAB47BC));
-    final label = '$num';
-    final st = bodyStyle(24 * scale, weight: 700);
-    drawText(c, label, at.translate(-textWidth(label, st) / 2, -15 * scale), st);
+  for (final (num, at, note, rr) in spots) {
+    final photo = thumbs[note.mediaName];
+    c.drawCircle(at.translate(0, 2), rr + 3, Paint()..color = const Color(0x66000000));
+    c.drawCircle(at, rr + 3, Paint()..color = const Color(0xFFFFFFFF));
+    if (photo != null) {
+      // The photo, cropped to a square from its middle and clipped to the circle.
+      final side = math.min(photo.width, photo.height).toDouble();
+      final src = Rect.fromCenter(center: Offset(photo.width / 2, photo.height / 2), width: side, height: side);
+      c.save();
+      c.clipPath(Path()..addOval(Rect.fromCircle(center: at, radius: rr)));
+      c.drawImageRect(photo, src, Rect.fromCircle(center: at, radius: rr), Paint()..filterQuality = FilterQuality.high);
+      c.restore();
+      // The number of the note in a badge on the rim.
+      final badge = at + Offset(rr * 0.72, -rr * 0.72);
+      final br = 15.0 * scale;
+      c.drawCircle(badge, br + 2.5, Paint()..color = const Color(0xFFFFFFFF));
+      c.drawCircle(badge, br, Paint()..color = const Color(0xFFAB47BC));
+      final label = '$num';
+      final st = bodyStyle(20 * scale, weight: 700);
+      drawText(c, label, badge.translate(-textWidth(label, st) / 2, -12 * scale), st);
+    } else {
+      c.drawCircle(at, rr, Paint()..color = const Color(0xFFAB47BC));
+      final label = '$num';
+      final st = bodyStyle(24 * scale, weight: 700);
+      drawText(c, label, at.translate(-textWidth(label, st) / 2, -15 * scale), st);
+    }
   }
   if (!labels) return;
-  for (final (_, at, note) in spots) {
+  for (final (_, at, note, rr) in spots) {
     final base = note.text.trim().isNotEmpty ? note.text.trim() : (note.mediaType == 'video' ? t('видео') : t('фото'));
     final text = base.length > 18 ? '${base.substring(0, 17)}…' : base;
     final ls = bodyStyle(26, weight: 500, color: const Color(0xFFFFFFFF));
@@ -669,10 +693,10 @@ void drawNoteMarkers(Canvas c, List<TrackNote> notes, Projection proj,
     const h = 42.0;
     // Right, left, above, below: the first position that stays inside the sheet and covers nothing else.
     final options = <Rect>[
-      Rect.fromLTWH(at.dx + r + 8, at.dy - h / 2, w, h),
-      Rect.fromLTWH(at.dx - r - 8 - w, at.dy - h / 2, w, h),
-      Rect.fromLTWH(at.dx - w / 2, at.dy - r - 8 - h, w, h),
-      Rect.fromLTWH(at.dx - w / 2, at.dy + r + 8, w, h),
+      Rect.fromLTWH(at.dx + rr + 8, at.dy - h / 2, w, h),
+      Rect.fromLTWH(at.dx - rr - 8 - w, at.dy - h / 2, w, h),
+      Rect.fromLTWH(at.dx - w / 2, at.dy - rr - 8 - h, w, h),
+      Rect.fromLTWH(at.dx - w / 2, at.dy + rr + 8, w, h),
     ];
     for (final box in options) {
       if (!bounds.contains(box.topLeft) || !bounds.contains(box.bottomRight)) continue;

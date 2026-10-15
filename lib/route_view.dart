@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'altitude.dart';
 import 'app_hooks.dart';
@@ -13,6 +14,7 @@ import 'gpx_export.dart';
 import 'heal.dart';
 import 'map_page.dart';
 import 'modes.dart';
+import 'note_thumbs.dart';
 import 'notes.dart';
 import 'poster_page.dart';
 import 'routes.dart';
@@ -374,6 +376,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
               itemBuilder: (_) => [
                 PopupMenuItem(value: 'text', child: Text(t('Изменить текст'))),
                 PopupMenuItem(value: 'media', child: Text(t('Заменить фото или видео'))),
+                if (n.mediaType == 'photo') PopupMenuItem(value: 'thumb', child: Text(t('Показать фото на постере…'))),
                 if (n.mediaName.isNotEmpty) PopupMenuItem(value: 'open', child: Text(t('Открыть галерею'))),
                 PopupMenuItem(value: 'delete', child: Text(t('Удалить заметку'))),
               ],
@@ -409,6 +412,8 @@ class _RouteViewPageState extends State<RouteViewPage> {
         _reload();
       case 'media':
         await _replaceMedia(n);
+      case 'thumb':
+        await _attachThumb(n);
       case 'open':
         await Gal.open();
       case 'delete':
@@ -427,8 +432,25 @@ class _RouteViewPageState extends State<RouteViewPage> {
         );
         if (ok != true) return;
         await TrackDb.instance.deleteNote(n.id);
+        await deleteNoteThumb(n.mediaName);
         _reload();
     }
+  }
+
+  /// The photo of a note taken before the app kept small copies: pick it from the gallery once, and the poster shows
+  /// it in the marker of the note.
+  Future<void> _attachThumb(TrackNote n) async {
+    final XFile? picked;
+    try {
+      picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    } catch (e) {
+      DebugLog.instance.log('NOTE', 'gallery pick failed: $e');
+      return;
+    }
+    if (picked == null) return;
+    final ok = await saveNoteThumb(picked.path, n.mediaName);
+    if (!mounted) return;
+    _snack(ok ? t('Готово: фото будет в маркере заметки на постере.') : t('Не удалось прочитать это фото.'));
   }
 
   /// A photo or video must really have been taken at this place, so it can only be replaced
@@ -471,6 +493,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
     final m = await captureMedia(video: video);
     if (m == null) return;
     await TrackDb.instance.updateNoteMedia(n.id, m.type, m.name);
+    await deleteNoteThumb(n.mediaName);
     DebugLog.instance.log('NOTE', 'media replaced for note ${n.id}, ${away.round()} m from the place');
     if (!mounted) return;
     _snack(t('Сохранено. Прежний файл остался в галерее, удалите его там при желании.'));
