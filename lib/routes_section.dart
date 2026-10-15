@@ -20,7 +20,7 @@ class RoutesSection extends StatelessWidget {
   final Future<void> Function() onChanged;
 
   /// "Follow the route": starts a recording with navigation along the route.
-  final Future<void> Function(int routeId) onFollow;
+  final Future<void> Function(int routeId, {bool reverse}) onFollow;
 
   const RoutesSection({super.key, required this.routes, required this.onChanged, required this.onFollow});
 
@@ -124,6 +124,8 @@ class RoutesSection extends StatelessWidget {
                     switch (v) {
                       case 'rename':
                         _rename(context, r);
+                      case 'reverse':
+                        onFollow(r.id, reverse: true);
                       case 'share':
                         _share(context, r);
                       case 'delete':
@@ -131,6 +133,7 @@ class RoutesSection extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => [
+                    PopupMenuItem(value: 'reverse', child: Text(t('Идти в обратную сторону'))),
                     PopupMenuItem(value: 'rename', child: Text(t('Переименовать'))),
                     PopupMenuItem(value: 'share', child: Text(t('Поделиться GPX'))),
                     PopupMenuItem(value: 'delete', child: Text(t('Удалить'))),

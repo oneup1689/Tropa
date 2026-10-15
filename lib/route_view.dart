@@ -5,6 +5,7 @@ import 'package:gal/gal.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'altitude.dart';
+import 'app_hooks.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'elevation.dart';
@@ -176,11 +177,14 @@ class _RouteViewPageState extends State<RouteViewPage> {
               _changeMode();
             case 'route':
               _saveAsRoute();
+            case 'follow':
+              _saveAsRoute(follow: true);
             case 'delete':
               _delete();
           }
         },
         itemBuilder: (_) => [
+          PopupMenuItem(value: 'follow', child: ListTile(leading: const Icon(Icons.navigation), title: Text(t('Идти по этому маршруту')), dense: true)),
           PopupMenuItem(value: 'route', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Сохранить как маршрут')), dense: true)),
           PopupMenuItem(value: 'rename', child: ListTile(leading: const Icon(Icons.edit_outlined), title: Text(t('Переименовать')), dense: true)),
           PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Изменить режим')), dense: true)),
@@ -189,7 +193,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
       );
 
   /// Copies the walk to the saved routes (thinned to a point every ~10 m), to walk it again with navigation.
-  Future<void> _saveAsRoute() async {
+  Future<void> _saveAsRoute({bool follow = false}) async {
     final pts = await TrackDb.instance.points(widget.sessionId);
     if (pts.length < 2) {
       _snack(t('Недостаточно точек'));
@@ -197,7 +201,14 @@ class _RouteViewPageState extends State<RouteViewPage> {
     }
     final route = thinToRoute([for (final p in pts) (lat: p.lat, lon: p.lon)]);
     final name = _title.trim().isEmpty ? widget.title : _title;
-    await TrackDb.instance.addRoute(name, route);
+    final id = await TrackDb.instance.addRoute(name, route);
+    if (follow) {
+      final go = AppHooks.startAlongRoute;
+      if (go == null || !mounted) return;
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      await go(id);
+      return;
+    }
     _snack(t('Сохранено в «Тропы → Маршруты»: {p0} ({p1} точек)', {'p0': name, 'p1': route.length}));
   }
 

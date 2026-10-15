@@ -95,6 +95,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     // The native service writes its notifications in the language of the app.
     L10n.revision.addListener(_sendLanguage);
     _sendLanguage();
+    AppSettings.instance.addListener(_sendSoundMode);
+    _sendSoundMode();
     _watchModes();
     if (Platform.isAndroid) {
       await _refresh();
@@ -115,6 +117,17 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       _log.log('RECOVERY', 'native service is already recording session=$sessionId, UI attached');
     }
     await _logEnvironment();
+  }
+
+  String? _soundModeSent;
+
+  /// The native side plays the sounds and owns the notification channels: tell it the chosen mode.
+  void _sendSoundMode() {
+    if (!Platform.isAndroid) return;
+    final mode = AppSettings.instance.getString('sound_mode');
+    if (mode == _soundModeSent) return;
+    _soundModeSent = mode;
+    _sys.invokeMethod<void>('setSoundMode', {'mode': mode}).catchError((Object _) {});
   }
 
   void _sendLanguage() {

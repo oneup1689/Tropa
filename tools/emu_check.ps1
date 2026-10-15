@@ -113,6 +113,9 @@ for ($i = 0; $i -lt 5; $i++) {
     adb emu geo fix 105.85684 21.03042 | Out-Null; Start-Sleep -Milliseconds 2200
 }
 Check "back on route" ((AppLog) -match "\[NAV\] back on route")
+Check "navigator started" ((AppLog) -match "\[NAV\] begin route=\d+")
+adb shell input keyevent KEYCODE_BACK   # v27: "Follow the route" opens the navigation screen; back to the Trails tab
+Start-Sleep 2
 TapLabel "^Stop$" | Out-Null   # Stop (the route banner shifts the button down)
 Start-Sleep 4
 

@@ -14,6 +14,7 @@ IconData _sectionIcon(String section) => switch (section) {
       'Запись' => Icons.fiber_manual_record_outlined,
       'Маршрут и данные' => Icons.route_outlined,
       'Навигация' => Icons.navigation_outlined,
+      'Звуки и вибрация' => Icons.volume_up_outlined,
       'Данные' => Icons.folder_outlined,
       _ => Icons.tune,
     };

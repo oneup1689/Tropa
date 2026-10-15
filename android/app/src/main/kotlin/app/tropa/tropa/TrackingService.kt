@@ -541,10 +541,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         requestUpdates(intervalMs)
         ensureHeartbeat()
         updateNotification(Tr.t(this, "Идёт запись маршрута"))
+        if (!restarted && !auto) Sounds.play(this, "start")
     }
 
     private fun stopRecording() {
         val id = sessionId
+        if (running) Sounds.play(this, "stop")
         try {
             db?.execSQL(
                 "UPDATE sessions SET status=?, end_ms=? WHERE id=?",
@@ -653,12 +655,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             goalStage = 2
             prefs.edit().putInt("goal_stage", 2).apply()
             log(this, "GOAL", "goal reached at ${distanceM.toInt()} m")
-            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Цель достигнута"), Tr.goalDone(this, goalLabel), "🎯")
+            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Цель достигнута"), Tr.goalDone(this, goalLabel), "🎯", "goal")
         } else if (goalRound && goalStage == 0 && distanceM >= goalM / 2) {
             goalStage = 1
             prefs.edit().putInt("goal_stage", 1).apply()
             log(this, "GOAL", "half way at ${distanceM.toInt()} m")
-            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Половина пути пройдена"), Tr.goalHalf(this, goalHalfLabel), "🎯")
+            Notifier.postAlert(this, Notifier.GOAL_ID, Tr.t(this, "Половина пути пройдена"), Tr.goalHalf(this, goalHalfLabel), "🎯", "half")
         }
     }
 
@@ -703,6 +705,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
 
     private fun startInForeground(text: String) {
         Notifier.ensureChannels(this)
+        Sounds.warmUp(this)
         val n = Notifier.ongoing(this, text)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(Notifier.NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -922,8 +925,11 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         if (route.loaded) {
             route.evaluate(
                 lat, lon, acc, offRouteBase, movingNow, now,
-                onOff = { d -> Notifier.postAlert(this, Notifier.ROUTE_ALERT_ID, Tr.t(this, "Вы сошли с маршрута"), Tr.offRoute(this, d)) },
-                onBack = { Notifier.cancel(this, Notifier.ROUTE_ALERT_ID) }
+                onOff = { d -> Notifier.postAlert(this, Notifier.ROUTE_ALERT_ID, Tr.t(this, "Вы сошли с маршрута"), Tr.offRoute(this, d), "⚠️", "route") },
+                onBack = {
+                    Notifier.cancel(this, Notifier.ROUTE_ALERT_ID)
+                    Sounds.play(this, "back")
+                }
             )
             offRouteM = route.lastDistance
         }

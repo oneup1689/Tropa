@@ -13,6 +13,9 @@ object Tr {
     private val en = mapOf(
         "Запись маршрута" to "Route recording",
         "Тревоги и напоминания" to "Alerts and reminders",
+        "GPS и разрешения" to "GPS and permissions",
+        "Сход с маршрута" to "Leaving the route",
+        "Подсказки" to "Hints",
         "GPS выключен — маршрут не пишется" to "GPS is off — the route is not being recorded",
         "Включите геолокацию, запись продолжится сама." to "Turn on location and the recording will continue by itself.",
         "Ожидание…" to "Waiting…",
@@ -30,6 +33,7 @@ object Tr {
         "Запись маршрута запущена автоматически." to "Route recording was started automatically.",
         "Не забудьте включить запись трека." to "Do not forget to start recording the track.",
         "Цель достигнута" to "Goal reached",
+        "Половина пути" to "Halfway",
         "Половина пути пройдена" to "Halfway there",
         "Похоже, вы едете" to "It looks like you are driving",
         "Выбран режим «Пешком». Переключить на «Смешанный» (пешком и транспорт)?" to "Walk mode is selected. Switch to Mixed (walking and vehicle)?",

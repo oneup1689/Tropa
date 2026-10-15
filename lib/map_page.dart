@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -112,6 +112,8 @@ class _MapPageState extends State<MapPage> {
   bool _following = false; // the camera stays on the marker
   bool _noMaps = false; // no map is installed at all (the tracker works without one)
   StreamSubscription<Position>? _posSub;
+  StreamSubscription<dynamic>? _compassSub;
+  DateTime? _gpsCourseAt;
   LatLng? _here;
   double _bearing = 0;
   bool _hasBearing = false;
@@ -147,6 +149,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void dispose() {
     _posSub?.cancel();
+    _compassSub?.cancel();
     _liveTimer?.cancel();
     super.dispose();
   }
@@ -185,6 +188,7 @@ class _MapPageState extends State<MapPage> {
     final z = _controller?.cameraPosition?.zoom ?? 0;
     if (z < 14) await _controller?.animateCamera(CameraUpdate.zoomTo(15));
     _posSub?.cancel();
+    _startCompass();
     final settings = Platform.isAndroid
         ? AndroidSettings(
             accuracy: LocationAccuracy.high,
@@ -203,10 +207,11 @@ class _MapPageState extends State<MapPage> {
     final c = _controller;
     if (c == null || !mounted || !_locating) return;
     final here = LatLng(p.latitude, p.longitude);
-    // The direction of movement is known only while moving; standing still the marker keeps the last one.
-    if (p.speed >= 0.7 && p.heading >= 0) {
+    // Walking: the GPS course is the truth; standing still the compass (see _startCompass) takes over.
+    if (p.speed >= 1.0 && p.hasHeading && p.heading > 0) {
       _bearing = p.heading;
       _hasBearing = true;
+      _gpsCourseAt = DateTime.now();
     }
     // The person dragged the map away: stop following.
     final cam = c.cameraPosition?.target;
@@ -232,9 +237,31 @@ class _MapPageState extends State<MapPage> {
     return math.sqrt(dx * dx + dy * dy);
   }
 
+  /// Compass heading while standing still (or moving slowly): the arrow follows where the phone points.
+  void _startCompass() {
+    if (!Platform.isAndroid || _compassSub != null) return;
+    _compassSub = const EventChannel('tropa/compass').receiveBroadcastStream().listen(
+      (v) async {
+        final here = _here;
+        final c = _controller;
+        if (here == null || c == null || !_locating) return;
+        final gpsFresh = _gpsCourseAt != null && DateTime.now().difference(_gpsCourseAt!) < const Duration(seconds: 3);
+        if (gpsFresh) return;
+        _bearing = (v as num).toDouble();
+        _hasBearing = true;
+        await c.setGeoJsonSource('locator', _fc([_locatorFeature(here)]));
+      },
+      onError: (Object e) => DebugLog.instance.log('MAP', 'compass: $e'),
+    );
+  }
+
   Future<void> _stopLocating() async {
     await _posSub?.cancel();
     _posSub = null;
+    await _compassSub?.cancel();
+    _compassSub = null;
+    _hasBearing = false;
+    _gpsCourseAt = null;
     _here = null;
     if (mounted && (_locating || _following)) setState(() => _locating = _following = false);
     await _controller?.setGeoJsonSource('locator', _fc(const []));
@@ -443,6 +470,10 @@ class _MapPageState extends State<MapPage> {
       if (line.length >= 2) {
         route = _fc([_lineFeature(line)]);
         all.addAll(line);
+        // Start and finish, so the direction of an imported GPX is clear. A loop gets a single marker.
+        final isLoop = Geolocator.distanceBetween(line.first.latitude, line.first.longitude, line.last.latitude, line.last.longitude) < 40;
+        marks.add(_pointFeature(line.first, color: '#43A047', radius: 7, label: isLoop ? t('Старт / финиш') : t('Старт')));
+        if (!isLoop) marks.add(_pointFeature(line.last, radius: 7, label: t('Финиш')));
       }
     }
 

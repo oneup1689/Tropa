@@ -4,7 +4,7 @@ class AppHooks {
   AppHooks._();
 
   /// Starts a recording that follows the imported route [id] (registered by the History tab).
-  static Future<void> Function(int routeId)? startAlongRoute;
+  static Future<void> Function(int routeId, {bool reverse})? startAlongRoute;
 
   /// Reloads the list of walks (after a backup was restored).
   static Future<void> Function()? reloadWalks;

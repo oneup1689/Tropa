@@ -7,6 +7,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -39,6 +40,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "tropa/compass").setStreamHandler(CompassStream(this))
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tropa/system")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -81,6 +83,33 @@ class MainActivity : FlutterActivity() {
                         // Free space where the maps are stored (the app's external folder).
                         val dir = getExternalFilesDir(null) ?: filesDir
                         result.success(android.os.StatFs(dir.path).availableBytes)
+                    }
+                    "setSoundMode" -> {
+                        Sounds.setMode(this, call.argument<String>("mode") ?: "both")
+                        Sounds.warmUp(this)
+                        result.success(null)
+                    }
+                    "playSound" -> {
+                        Sounds.play(this, call.argument<String>("name") ?: "")
+                        result.success(null)
+                    }
+                    "ttsStatus" -> Speaker.status(this, call.argument<String>("lang") ?: "ru") { s -> runOnUiThread { result.success(s) } }
+                    "speak" -> {
+                        Speaker.speak(this, call.argument<String>("text") ?: "", call.argument<String>("lang") ?: "ru")
+                        result.success(null)
+                    }
+                    "stopSpeak" -> {
+                        Speaker.stop()
+                        result.success(null)
+                    }
+                    "ttsInstall" -> {
+                        Speaker.openInstall(this)
+                        result.success(null)
+                    }
+                    "vibratePattern" -> {
+                        val p = call.argument<List<Number>>("pattern") ?: emptyList()
+                        Speaker.vibrate(this, LongArray(p.size) { p[it].toLong() })
+                        result.success(null)
                     }
                     "moveToBack" -> {
                         moveTaskToBack(true)

@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -23,6 +22,8 @@ import 'auto_record_page.dart';
 import 'readiness.dart';
 import 'recorder.dart';
 import 'route_view.dart';
+import 'nav_page.dart';
+import 'route_navigator.dart';
 import 'routes_section.dart';
 import 'settings.dart';
 import 'stats.dart';
@@ -38,6 +39,7 @@ Future<void> main() async {
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
   await _logDevice();
   await Recorder.instance.init();
+  await RouteNavigator.instance.restore();
   runApp(TropaApp());
 }
 
@@ -127,6 +129,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _refreshReadiness();
     rec.addListener(_onChange);
+    RouteNavigator.instance.addListener(_onChange);
     AppSettings.instance.addListener(_onChange); // e.g. Pro mode switched on: the menu shows the extra items
     var tick = 0;
     _ticker = Timer.periodic(Duration(seconds: 1), (_) {
@@ -148,6 +151,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _ticker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     rec.removeListener(_onChange);
+    RouteNavigator.instance.removeListener(_onChange);
     AppSettings.instance.removeListener(_onChange);
     super.dispose();
   }
@@ -313,15 +317,23 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   /// Starts a recording along an imported route (also called from the Routes tab).
-  Future<void> startAlongRoute(int routeId) async {
+  Future<void> startAlongRoute(int routeId, {bool reverse = false}) async {
     if (rec.recording) {
-      _snack(t('Сначала остановите текущую запись'));
+      _snack(RouteNavigator.instance.active ? t('Навигация уже идёт') : t('Сначала остановите текущую запись'));
+      if (RouteNavigator.instance.active && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const NavPage()));
       return;
     }
     if (!await _ensurePermissions()) return;
     final ok = await rec.start(routeId: routeId);
-    _snack(ok ? t('Запись идёт по выбранному маршруту') : t('Не удалось начать запись'));
+    if (!ok) {
+      _snack(t('Не удалось начать запись'));
+      await _reload();
+      return;
+    }
+    final name = routes.where((r) => r.id == routeId).map((r) => r.name).firstOrNull ?? '';
+    final started = await RouteNavigator.instance.begin(routeId, name, reverseDir: reverse);
     await _reload();
+    if (started && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const NavPage()));
   }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
@@ -348,20 +360,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      // While recording, "Back" only minimises the app: closing the activity can stop the recorder.
-      canPop: !rec.recording,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && Platform.isAndroid) {
-          DebugLog.instance.log('LIFECYCLE', 'Back pressed while recording -> moveTaskToBack');
-          MethodChannel('tropa/system').invokeMethod('moveToBack');
-        }
-      },
-      child: _scaffold(context),
-    );
-  }
-
-  Widget _scaffold(BuildContext context) {
+    // "Back" is handled in AppShell (a second PopScope here minimised the app on every tab).
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
@@ -441,7 +440,18 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         color: noSensor ? cs.errorContainer : cs.primaryContainer,
       ));
     }
-    if (rec.recording && rec.offRouteMeters >= 0) {
+    if (rec.recording && RouteNavigator.instance.active) {
+      out.add(banner(
+        Icons.navigation,
+        t('Навигация: {n}', {'n': RouteNavigator.instance.routeName}),
+        t('Подсказки поворотов включены'),
+        color: cs.primaryContainer,
+        action: FilledButton(
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NavPage())),
+          child: Text(t('Открыть')),
+        ),
+      ));
+    } else if (rec.recording && rec.offRouteMeters >= 0) {
       final off = rec.offRouteMeters > AppSettings.instance.offRouteMeters;
       out.add(banner(
         Icons.navigation,
