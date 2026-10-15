@@ -218,6 +218,17 @@ Future<List<double>> sessionAltitude(int sessionId, List<TrackPoint> pts) async 
 /// Climb and descent for a profile that went through [fuseWithDem] (smoother than raw GPS: 6 m).
 ElevationStats elevationOfFused(List<double> alt) => elevationStats(alt, threshold: 6);
 
+/// The kept terrain-model heights of a route (null when never fetched).
+Future<DemSamples?> routeElevationSamples(int routeId) async {
+  try {
+    final cached = await TrackDb.instance.routeElevation(routeId);
+    return cached == null ? null : DemSamples.fromJson(jsonDecode(cached) as Map<String, dynamic>);
+  } catch (e) {
+    DebugLog.instance.log('DEM', 'stored route elevation unreadable: $e');
+    return null;
+  }
+}
+
 /// Climb and descent of an imported route from the terrain model. The heights are fetched once (internet needed,
 /// only when [allowFetch]) and kept in the route row; without them (offline, never fetched) the result is null.
 Future<ElevationStats?> routeElevationStats(int routeId, List<({double lat, double lon})> pts, {bool allowFetch = true}) async {

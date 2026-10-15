@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -17,7 +18,9 @@ import 'heal.dart' show haversine;
 import 'l10n.dart';
 import 'map_page.dart';
 import 'route_estimate.dart';
+import 'route_map_view.dart';
 import 'route_nav.dart' show bearingDeg;
+import 'route_profile.dart';
 import 'nav_page.dart';
 import 'route_view.dart';
 import 'routes.dart';
@@ -41,6 +44,10 @@ class _RoutePageState extends State<RoutePage> {
   bool _loaded = false;
   bool _reverse = false;
   Position? _me;
+  final ValueNotifier<Position?> _meNotifier = ValueNotifier(null); // the map and the preview follow it
+  StreamSubscription<Position>? _posSub;
+  DemSamples? _dem;
+  RouteProfileData? _profile;
   bool _locating = false;
   String? _locError;
   ElevationStats? _elev;
@@ -52,6 +59,13 @@ class _RoutePageState extends State<RoutePage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    _meNotifier.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -68,6 +82,7 @@ class _RoutePageState extends State<RoutePage> {
     if (!mounted) return;
     if (cached != null) {
       setState(() => _elev = cached);
+      await _loadProfile();
       return;
     }
     final net = await networkInfo();
@@ -79,6 +94,18 @@ class _RoutePageState extends State<RoutePage> {
       _elev = fetched;
       _elevLoading = false;
     });
+    if (fetched != null) await _loadProfile();
+  }
+
+  /// The kept terrain heights, as the chart under the map.
+  Future<void> _loadProfile() async {
+    _dem = await routeElevationSamples(widget.route.id);
+    if (mounted) setState(_rebuildProfile);
+  }
+
+  void _rebuildProfile() {
+    final dem = _dem;
+    _profile = dem == null || _pts.length < 2 ? null : routeProfileSeries(_pts, dem, reverse: _reverse);
   }
 
   ({double lat, double lon}) get _start => _reverse ? _pts.last : _pts.first;
@@ -108,7 +135,29 @@ class _RoutePageState extends State<RoutePage> {
       _me = await Geolocator.getLastKnownPosition();
       if (_me == null) _locError = t('Не удалось определить положение: сигнала GPS пока нет.');
     }
+    _meNotifier.value = _me;
+    if (_me != null) _followPosition();
     if (mounted) setState(() => _locating = false);
+  }
+
+  /// After the first fix the marker keeps following (about once a second) while this screen is open.
+  void _followPosition() {
+    if (_posSub != null) return;
+    _posSub = Geolocator.getPositionStream(
+      locationSettings: AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2,
+        intervalDuration: const Duration(seconds: 2),
+        forceLocationManager: true,
+      ),
+    ).listen(
+      (p) {
+        _me = p;
+        _meNotifier.value = p;
+        if (mounted) setState(() {});
+      },
+      onError: (Object e) => DebugLog.instance.log('NAV', 'route page position stream: $e'),
+    );
   }
 
   static String _coords(({double lat, double lon}) p) => '${p.lat.toStringAsFixed(5)}, ${p.lon.toStringAsFixed(5)}';
@@ -226,15 +275,30 @@ class _RoutePageState extends State<RoutePage> {
         body: !_loaded
             ? const Center(child: CircularProgressIndicator())
             : ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 28), children: [
-                Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: SizedBox(
-                    height: 230,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: CustomPaint(
-                        size: Size.infinite,
-                        painter: _PreviewPainter(_pts, _reverse, _me, cs.primary, cs.tertiary),
+                RouteMapView(
+                  key: ValueKey('map-${widget.route.id}'),
+                  routeId: widget.route.id,
+                  name: _name,
+                  points: _pts,
+                  reverse: _reverse,
+                  me: _meNotifier,
+                  onFullscreen: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => MapPage(routeId: widget.route.id, title: _name)),
+                  ),
+                  preview: Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: SizedBox(
+                      height: 230,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: ValueListenableBuilder<Position?>(
+                          valueListenable: _meNotifier,
+                          builder: (context, me, _) => CustomPaint(
+                            size: Size.infinite,
+                            painter: _PreviewPainter(_pts, _reverse, me, cs.primary, cs.tertiary),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -255,6 +319,12 @@ class _RoutePageState extends State<RoutePage> {
                     child: Text(t('Высоты подгрузятся при подключении к интернету; пока время оценено только по длине.'),
                         style: text.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
                   ),
+                if (_profile != null && _profile!.meaningful) ...[
+                  const SizedBox(height: 10),
+                  Text(t('Профиль высот'), style: text.titleSmall),
+                  const SizedBox(height: 4),
+                  RouteProfile(data: _profile!),
+                ],
                 const SizedBox(height: 12),
                 SegmentedButton<bool>(
                   showSelectedIcon: false,
@@ -263,7 +333,10 @@ class _RoutePageState extends State<RoutePage> {
                     ButtonSegment(value: true, icon: const Icon(Icons.arrow_back), label: Text(t('Обратно'))),
                   ],
                   selected: {_reverse},
-                  onSelectionChanged: (v) => setState(() => _reverse = v.first),
+                  onSelectionChanged: (v) => setState(() {
+                    _reverse = v.first;
+                    _rebuildProfile();
+                  }),
                 ),
                 const SizedBox(height: 12),
                 _pointCard(context, Icons.trip_origin, t('Старт'), _start),
@@ -271,24 +344,11 @@ class _RoutePageState extends State<RoutePage> {
                 _meCard(context),
                 if (_walks.isNotEmpty) _walksCard(context),
                 const SizedBox(height: 16),
-                Row(children: [
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton.icon(
-                      onPressed: _begin,
-                      icon: const Icon(Icons.navigation),
-                      label: Text(t('Идти по маршруту')),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MapPage(routeId: widget.route.id, title: _name))),
-                      icon: const Icon(Icons.map),
-                      label: Text(t('Карта')),
-                    ),
-                  ),
-                ]),
+                FilledButton.icon(
+                  onPressed: _begin,
+                  icon: const Icon(Icons.navigation),
+                  label: Text(t('Идти по маршруту')),
+                ),
                 const SizedBox(height: 6),
                 Text(
                   t('Если вы не у старта, приложение предложит дождаться вас там или начать с текущего места.'),

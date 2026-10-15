@@ -14,6 +14,7 @@ import 'brand.dart';
 import 'db.dart';
 import 'debug_log.dart';
 import 'heal.dart';
+import 'map_geojson.dart';
 import 'maps.dart';
 import 'maps_page.dart';
 import 'modes.dart';
@@ -68,27 +69,12 @@ class MapPage extends StatefulWidget {
   State<MapPage> createState() => _MapPageState();
 }
 
-Map<String, Object?> _fc(List<Map<String, Object?>> features) => {'type': 'FeatureCollection', 'features': features};
+Map<String, Object?> _fc(List<Map<String, Object?>> features) => geoFc(features);
 
-Map<String, Object?> _lineFeature(List<LatLng> pts) => {
-      'type': 'Feature',
-      'properties': <String, Object?>{},
-      'geometry': {
-        'type': 'LineString',
-        'coordinates': [
-          for (final p in pts) [p.longitude, p.latitude],
-        ],
-      },
-    };
+Map<String, Object?> _lineFeature(List<LatLng> pts) => geoLine(pts);
 
-Map<String, Object?> _pointFeature(LatLng p, {String color = '#E53935', double radius = 8, String label = ''}) => {
-      'type': 'Feature',
-      'properties': {'color': color, 'r': radius, 'label': label},
-      'geometry': {
-        'type': 'Point',
-        'coordinates': [p.longitude, p.latitude],
-      },
-    };
+Map<String, Object?> _pointFeature(LatLng p, {String color = '#E53935', double radius = 8, String label = ''}) =>
+    geoPoint(p, color: color, radius: radius, label: label);
 
 class _Overlay {
   final Map<String, Object?> track, restored, gaps, route, marks;
@@ -270,37 +256,7 @@ class _MapPageState extends State<MapPage> {
     await _controller?.setGeoJsonSource('locator', _fc(const []));
   }
 
-  /// The marker pictures in the colours of the app: an orange arrow with a sand outline and a soft shadow (when the
-  /// direction is known), or an orange dot with a sand ring.
-  Future<Uint8List> _markerPng({required bool arrow}) async {
-    final rec = ui.PictureRecorder();
-    final c = Canvas(rec);
-    const mid = Offset(48, 48);
-    if (arrow) {
-      final shape = Path()
-        ..moveTo(48, 12)
-        ..lineTo(70, 78)
-        ..lineTo(48, 64)
-        ..lineTo(26, 78)
-        ..close();
-      c.drawPath(shape.shift(const Offset(0, 3)), Paint()..color = const Color(0x40000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-      c.drawPath(
-        shape,
-        Paint()
-          ..color = brandSand
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 9
-          ..strokeJoin = StrokeJoin.round,
-      );
-      c.drawPath(shape, Paint()..color = brandAccent);
-    } else {
-      c.drawCircle(mid + const Offset(0, 2.5), 22, Paint()..color = const Color(0x40000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-      c.drawCircle(mid, 22, Paint()..color = brandSand);
-      c.drawCircle(mid, 14, Paint()..color = brandAccent);
-    }
-    final img = await rec.endRecording().toImage(96, 96);
-    return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
-  }
+  Future<Uint8List> _markerPng({required bool arrow}) => locatorMarkerPng(arrow: arrow);
 
   void _say(String text) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));

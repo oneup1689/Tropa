@@ -17,6 +17,10 @@ class RegionBounds {
   const RegionBounds(this.minLon, this.minLat, this.maxLon, this.maxLat);
 
   bool contains(double lat, double lon) => lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
+
+  /// The whole box (a route's frame) lies inside these bounds.
+  bool containsBox(double minLat, double minLon, double maxLat, double maxLon) =>
+      contains(minLat, minLon) && contains(maxLat, maxLon);
 }
 
 class MapRegion {
@@ -95,6 +99,15 @@ class MapStore {
   static Future<MapRegion?> regionFor(double lat, double lon) async {
     for (final r in await regions()) {
       if (r.bounds?.contains(lat, lon) ?? false) return r;
+    }
+    return null;
+  }
+
+  /// The installed region that covers the whole frame (a style takes a single map file, so two regions that
+  /// only cover it together do not count).
+  static Future<MapRegion?> regionCovering(double minLat, double minLon, double maxLat, double maxLon) async {
+    for (final r in await regions()) {
+      if (r.bounds?.containsBox(minLat, minLon, maxLat, maxLon) ?? false) return r;
     }
     return null;
   }
@@ -193,13 +206,14 @@ class MapStore {
     required bool dark,
     required Map<String, Object?> sources,
     required List<Map<String, Object?>> layers,
+    String fileName = 'style_active.json',
   }) async {
     final style = jsonDecode(await styleFor(region, dark: dark)) as Map<String, dynamic>;
     (style['sources'] as Map<String, dynamic>).addAll(sources.map((k, v) => MapEntry(k, v)));
     (style['layers'] as List<dynamic>).addAll(layers);
     final root = await _assetDir();
     await root.create(recursive: true);
-    final file = File(p.join(root.path, 'style_active.json'));
+    final file = File(p.join(root.path, fileName));
     await file.writeAsString(jsonEncode(style));
     return file.path;
   }
