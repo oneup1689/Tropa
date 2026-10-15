@@ -13,7 +13,9 @@ import 'app_shell.dart';
 import 'brand.dart';
 import 'db.dart';
 import 'debug_log.dart';
+import 'device_net.dart';
 import 'geoid.dart';
+import 'heal.dart' show haversine;
 import 'l10n.dart';
 import 'map_page.dart';
 import 'modes.dart';
@@ -290,7 +292,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         log.log('PERM', 'ignoreBatteryOptimizations=$r');
       }
     }
-    return true;
+    // The last check: GPS switched off, access revoked... tells exactly what is wrong and how to fix it.
+    if (!mounted) return false;
+    return ensureCanStart(context);
   }
 
   Future<void> _toggle() async {
@@ -301,9 +305,13 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     if (!await _ensurePermissions()) return;
     final ok = await rec.start();
-    if (!ok) _snack(t('Не удалось начать запись. Включите GPS в настройках телефона.'));
+    if (!ok) _snack(_startFailedText);
     await _reload();
   }
+
+  /// GPS and permissions are checked before the start ([ensureCanStart]); what is left is the service itself.
+  String get _startFailedText =>
+      t('Служба записи не запустилась. Попробуйте ещё раз; если не помогает, отправьте лог (Настройки → Данные).');
 
   Future<void> _resume(SessionInfo s) async {
     if (!await _ensurePermissions()) return;
@@ -323,17 +331,124 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (RouteNavigator.instance.active && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const NavPage()));
       return;
     }
+    if (rec.waiting) {
+      _snack(t('Приложение уже ждёт вас у старта маршрута'));
+      return;
+    }
     if (!await _ensurePermissions()) return;
-    final ok = await rec.start(routeId: routeId);
-    if (!ok) {
-      _snack(t('Не удалось начать запись'));
-      await _reload();
+    final pts = await TrackDb.instance.routePoints(routeId);
+    if (pts.length < 2) {
+      _snack(t('В маршруте слишком мало точек'));
       return;
     }
     final name = routes.where((r) => r.id == routeId).map((r) => r.name).firstOrNull ?? '';
-    final started = await RouteNavigator.instance.begin(routeId, name, reverseDir: reverse);
+    final start = reverse ? pts.last : pts.first;
+
+    // Where is the person? Starting a recording away from the route start would record the way there as the route.
+    _snack(t('Определяю, где вы…'));
+    final pos = await _currentPosition();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    final dist = pos == null ? null : haversine(pos.latitude, pos.longitude, start.lat, start.lon);
+    DebugLog.instance.log('NAV', 'start route=$routeId reverse=$reverse distanceToStart=${dist?.round()}');
+    if (dist != null && dist <= 50) {
+      await _beginAlong(routeId, name, reverse, approach: false);
+      return;
+    }
+    final choice = await _askStartChoice(dist, start, name);
+    if (choice == 'here') {
+      await _beginAlong(routeId, name, reverse, approach: true);
+    } else if (choice == 'wait') {
+      final ok = await rec.startWait(routeId: routeId, lat: start.lat, lon: start.lon);
+      if (ok) {
+        await RouteNavigator.instance.prepareWait(routeId, name, reverseDir: reverse);
+        _snack(t('Жду вас у старта. Запись и навигация начнутся сами.'));
+      } else {
+        _snack(_startFailedText);
+      }
+      await _reload();
+    }
+  }
+
+  Future<Position?> _currentPosition() async {
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          forceLocationManager: true,
+          timeLimit: const Duration(seconds: 8),
+        ),
+      );
+    } catch (e) {
+      DebugLog.instance.log('NAV', 'current position unavailable: $e');
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  Future<void> _beginAlong(int routeId, String name, bool reverse, {required bool approach}) async {
+    final ok = await rec.start(routeId: routeId, approach: approach);
+    if (!ok) {
+      _snack(_startFailedText);
+      await _reload();
+      return;
+    }
+    final started = await RouteNavigator.instance.begin(routeId, name, reverseDir: reverse, approach: approach);
     await _reload();
     if (started && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const NavPage()));
+  }
+
+  /// "You are X km from the start": wait there, start from here, or look at the start in another map app.
+  Future<String?> _askStartChoice(double? dist, ({double lat, double lon}) start, String name) {
+    final text = Theme.of(context).textTheme;
+    return showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: Text(dist == null ? t('Вы не у старта маршрута') : t('До старта {d}', {'d': Units.dist(dist, digits: dist < 1000 ? 2 : 1)})),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'wait'),
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.flag_circle_outlined),
+              title: Text(t('Ждать у старта')),
+              subtitle: Text(t('Запись и навигация начнутся сами, когда вы подойдёте. Можно убрать телефон.')),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'here'),
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.play_circle_outline),
+              title: Text(t('Начать запись отсюда')),
+              subtitle: Text(t('Приложение подскажет путь к старту. Дорога до него тоже запишется.')),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () async {
+              final ok = await openInMaps(start.lat, start.lon, name);
+              if (!ok) _snack(t('На телефоне нет приложения с картами'));
+            },
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.map_outlined),
+              title: Text(t('Открыть старт в приложении карт')),
+              subtitle: Text(t('Чтобы построить дорогу до старта. Потом вернитесь в Tropa.'), style: text.bodySmall),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: TextButton(onPressed: () => Navigator.pop(c), child: Text(t('Отмена'))),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
@@ -391,7 +506,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (sessions.isEmpty) _emptyState(context),
             for (final s in sessions) _sessionCard(context, s),
           ] else
-            RoutesSection(routes: routes, onChanged: _reload, onFollow: startAlongRoute),
+            RoutesSection(routes: routes, onChanged: _reload),
         ],
       ),
     );
@@ -438,6 +553,28 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ? t('На этом телефоне нет датчика шагов или движения: автозапись не заметит, что вы пошли. Запускайте запись кнопкой.')
             : t('Жду движения: GPS выключен. Запись начнётся сама.'),
         color: noSensor ? cs.errorContainer : cs.primaryContainer,
+      ));
+    }
+    if (rec.waiting) {
+      final nav = RouteNavigator.instance;
+      out.add(banner(
+        Icons.flag_circle,
+        rec.waitDistM >= 0
+            ? t('Ждём вас у старта: {d}', {'d': Units.dist(rec.waitDistM, digits: rec.waitDistM < 1000 ? 2 : 1)})
+            : t('Ждём вас у старта маршрута'),
+        t('Запись и навигация начнутся сами, когда вы подойдёте.'),
+        color: cs.primaryContainer,
+        action: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (nav.routeId != null)
+            FilledButton(onPressed: () => _beginAlong(nav.routeId!, nav.routeName, nav.reverse, approach: true), child: Text(t('Начать сейчас'))),
+          TextButton(
+            onPressed: () async {
+              await rec.cancelWait();
+              await nav.cancelPending();
+            },
+            child: Text(t('Отмена')),
+          ),
+        ]),
       ));
     }
     if (rec.recording && RouteNavigator.instance.active) {

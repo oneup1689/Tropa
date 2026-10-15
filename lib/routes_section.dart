@@ -2,12 +2,10 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import 'db.dart';
 import 'l10n.dart';
-import 'map_page.dart';
+import 'route_page.dart';
 import 'routes.dart';
 import 'units.dart';
 
@@ -19,10 +17,7 @@ class RoutesSection extends StatelessWidget {
   /// Called after a route was added, renamed or deleted (the list must be loaded again).
   final Future<void> Function() onChanged;
 
-  /// "Follow the route": starts a recording with navigation along the route.
-  final Future<void> Function(int routeId, {bool reverse}) onFollow;
-
-  const RoutesSection({super.key, required this.routes, required this.onChanged, required this.onFollow});
+  const RoutesSection({super.key, required this.routes, required this.onChanged});
 
   void _say(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -49,45 +44,13 @@ class RoutesSection extends StatelessWidget {
     await onChanged();
   }
 
-  Future<void> _share(BuildContext context, RouteInfo r) async {
-    final pts = await TrackDb.instance.routePoints(r.id);
-    final dir = await getTemporaryDirectory();
-    final safe = r.name.replaceAll(RegExp(r'[^\wА-Яа-яЁё\- ]'), '_').trim();
-    final file = File('${dir.path}/${safe.isEmpty ? 'route' : safe}.gpx');
-    await file.writeAsString(routeToGpx(r.name, pts));
-    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: t('Tropa — маршрут')));
-  }
-
-  Future<void> _rename(BuildContext context, RouteInfo r) async {
-    final name = await showDialog<String>(context: context, builder: (_) => _NameDialog(initial: r.name));
-    if (name == null || name.isEmpty) return;
-    await TrackDb.instance.renameRoute(r.id, name);
-    await onChanged();
-  }
-
-  Future<void> _delete(BuildContext context, RouteInfo r) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(t('Удалить маршрут «{p0}»?', {'p0': r.name})),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
-          TextButton(onPressed: () => Navigator.pop(c, true), child: Text(t('Удалить'))),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await TrackDb.instance.deleteRoute(r.id);
-    await onChanged();
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(
-        t('Маршруты, по которым можно идти заново: файл GPX или пройденная прогулка. Во время записи приложение предупредит, если вы сойдёте с маршрута.'),
+        t('Маршруты, по которым можно идти: файл GPX или пройденная прогулка. Откройте маршрут, чтобы посмотреть его и начать.'),
         style: text.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
       const SizedBox(height: 10),
@@ -114,79 +77,19 @@ class RoutesSection extends StatelessWidget {
         ),
       for (final r in routes)
         Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Expanded(child: Text(r.name, style: text.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                PopupMenuButton<String>(
-                  onSelected: (v) {
-                    switch (v) {
-                      case 'rename':
-                        _rename(context, r);
-                      case 'reverse':
-                        onFollow(r.id, reverse: true);
-                      case 'share':
-                        _share(context, r);
-                      case 'delete':
-                        _delete(context, r);
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(value: 'reverse', child: Text(t('Идти в обратную сторону'))),
-                    PopupMenuItem(value: 'rename', child: Text(t('Переименовать'))),
-                    PopupMenuItem(value: 'share', child: Text(t('Поделиться GPX'))),
-                    PopupMenuItem(value: 'delete', child: Text(t('Удалить'))),
-                  ],
-                ),
-              ]),
-              Text(t('{p0} · {p1} точек', {'p0': Units.dist(r.lengthM), 'p1': r.pointCount}),
-                  style: text.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
-              const SizedBox(height: 10),
-              Wrap(spacing: 8, runSpacing: 6, children: [
-                FilledButton.icon(
-                  onPressed: () => onFollow(r.id),
-                  icon: const Icon(Icons.navigation),
-                  label: Text(t('Идти по маршруту')),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MapPage(routeId: r.id, title: r.name))),
-                  icon: const Icon(Icons.map),
-                  label: Text(t('На карте')),
-                ),
-              ]),
-            ]),
+          child: ListTile(
+            contentPadding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
+            leading: const Icon(Icons.alt_route),
+            title: Text(r.name, style: text.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(t('{p0} · {p1} точек', {'p0': Units.dist(r.lengthM), 'p1': r.pointCount}),
+                style: text.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final changed = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => RoutePage(route: r)));
+              if (changed == true) await onChanged();
+            },
           ),
         ),
     ]);
   }
-}
-
-class _NameDialog extends StatefulWidget {
-  final String initial;
-
-  const _NameDialog({required this.initial});
-
-  @override
-  State<_NameDialog> createState() => _NameDialogState();
-}
-
-class _NameDialogState extends State<_NameDialog> {
-  late final TextEditingController _ctl = TextEditingController(text: widget.initial);
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-        title: Text(t('Название маршрута')),
-        content: TextField(controller: _ctl, autofocus: true, textCapitalization: TextCapitalization.sentences),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text(t('Отмена'))),
-          TextButton(onPressed: () => Navigator.pop(context, _ctl.text.trim()), child: Text(t('Сохранить'))),
-        ],
-      );
 }

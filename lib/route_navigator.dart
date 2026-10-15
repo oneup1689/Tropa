@@ -46,18 +46,61 @@ class RouteNavigator extends ChangeNotifier {
   bool get voiceOn => AppSettings.instance.getBool('nav_voice');
   bool get vibrateOn => AppSettings.instance.getBool('nav_vibrate');
 
+  /// The service waits for the person at the start of the route; navigation begins when the recording does.
+  bool pending = false;
+  bool _sawWait = false;
+
+  /// Prepares navigation along [id] for a recording that starts later (the person is not at the start yet).
+  Future<void> prepareWait(int id, String name, {bool reverseDir = false}) async {
+    routeId = id;
+    routeName = name;
+    reverse = reverseDir;
+    pending = true;
+    _sawWait = false;
+    if (!_listening) {
+      _rec.addListener(_onRecorder);
+      _listening = true;
+    }
+    await _save();
+    _log.log('NAV', 'waiting for the start of route=$id reverse=$reverseDir');
+    notifyListeners();
+  }
+
+  /// Gives up waiting (the service was stopped, or the person cancelled).
+  Future<void> cancelPending() async {
+    if (!pending) return;
+    pending = false;
+    if (!active && _listening) {
+      _rec.removeListener(_onRecorder);
+      _listening = false;
+    }
+    await _deleteFile();
+    _log.log('NAV', 'waiting cancelled');
+    notifyListeners();
+  }
+
+  /// The person joins the route somewhere else than at its start.
+  void skipApproach() {
+    _engine?.skipApproach();
+    _save();
+    notifyListeners();
+  }
+
   /// Prepares navigation along [id]. The recording is started by the caller (with the same route id).
-  Future<bool> begin(int id, String name, {bool reverseDir = false}) async {
+  /// With [approach] the route counts from its start: until the person gets there the screen leads them to it.
+  Future<bool> begin(int id, String name, {bool reverseDir = false, bool approach = false}) async {
     final rows = await TrackDb.instance.routePoints(id);
     if (rows.length < 2) return false;
     reverse = reverseDir;
     routeId = id;
     routeName = name;
+    pending = false;
     final bike = _rec.activeMode == TravelMode.bike || _rec.activeMode == TravelMode.car;
     _engine = NavEngine(
       RoutePath.build([for (final r in rows) LatLon(r.lat, r.lon)], reverse: reverseDir),
       farM: bike ? 150 : 100,
       nearM: bike ? 50 : 30,
+      approach: approach,
     );
     state = null;
     offRoute = false;
@@ -81,12 +124,23 @@ class RouteNavigator extends ChangeNotifier {
     try {
       final f = await _file();
       if (!await f.exists()) return;
+      final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final id = (m['id'] as num).toInt(), name = (m['name'] as String?) ?? '';
+      if (m['pending'] == true) {
+        if (_rec.waiting) {
+          await prepareWait(id, name, reverseDir: m['reverse'] == true);
+        } else if (_rec.recording) {
+          await begin(id, name, reverseDir: m['reverse'] == true);
+        } else {
+          await f.delete();
+        }
+        return;
+      }
       if (!_rec.recording) {
         await f.delete();
         return;
       }
-      final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      await begin((m['id'] as num).toInt(), (m['name'] as String?) ?? '', reverseDir: m['reverse'] == true);
+      await begin(id, name, reverseDir: m['reverse'] == true, approach: m['approach'] == true);
     } catch (e) {
       _log.log('NAV', 'restore failed: $e');
     }
@@ -96,9 +150,24 @@ class RouteNavigator extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      await (await _file()).writeAsString(jsonEncode({'id': routeId, 'name': routeName, 'reverse': reverse}));
+      await (await _file()).writeAsString(jsonEncode({
+        'id': routeId,
+        'name': routeName,
+        'reverse': reverse,
+        'pending': pending,
+        'approach': _engine?.approaching ?? false,
+      }));
     } catch (e) {
       _log.log('NAV', 'save failed: $e');
+    }
+  }
+
+  Future<void> _deleteFile() async {
+    try {
+      final f = await _file();
+      if (await f.exists()) await f.delete();
+    } catch (e) {
+      _log.log('NAV', 'state file delete failed: $e');
     }
   }
 
@@ -112,12 +181,7 @@ class RouteNavigator extends ChangeNotifier {
       _rec.removeListener(_onRecorder);
       _listening = false;
     }
-    try {
-      final f = await _file();
-      if (await f.exists()) await f.delete();
-    } catch (e) {
-      _log.log('NAV', 'state file delete failed: $e');
-    }
+    await _deleteFile();
     await _keepScreen(false);
     if (Platform.isAndroid) _sys.invokeMethod<void>('stopSpeak').catchError((Object _) {});
     _log.log('NAV', 'end');
@@ -150,6 +214,18 @@ class RouteNavigator extends ChangeNotifier {
   // ------------------------------------------------------------------ progress
 
   void _onRecorder() {
+    if (pending) {
+      // Waiting at a distance: the service starts the recording when the person reaches the start.
+      if (_rec.recording) {
+        pending = false;
+        begin(routeId!, routeName, reverseDir: reverse);
+      } else if (_rec.waiting) {
+        _sawWait = true;
+      } else if (_sawWait) {
+        cancelPending();
+      }
+      return;
+    }
     final eng = _engine;
     if (!active || eng == null) return;
     if (!_rec.recording) {
@@ -159,13 +235,23 @@ class RouteNavigator extends ChangeNotifier {
     }
     if (!_titled && _rec.sessionId != null) {
       _titled = true;
-      TrackDb.instance.setSessionMeta(_rec.sessionId!, {'title': routeName}).catchError((Object e) {
+      TrackDb.instance.setSessionMeta(_rec.sessionId!, {'title': routeName, 'route_id': routeId}).catchError((Object e) {
         _log.log('NAV', 'title failed: $e');
       });
     }
     if (_rec.lastLat == 0 && _rec.lastLon == 0) return;
     final s = eng.update(_rec.lastLat, _rec.lastLon, accuracy: _rec.lastAccuracy > 0 ? _rec.lastAccuracy : 10);
     state = s;
+
+    if (s.justReachedStart) {
+      _save();
+      _say(t('Вы у старта маршрута'), const [0, 300], tone: 'start');
+    }
+    if (s.toStartM != null) {
+      // Still on the way to the start: "off route" does not apply yet.
+      notifyListeners();
+      return;
+    }
 
     // "Off route" / "back on route" with hysteresis, spoken once per change.
     final limit = math.max(AppSettings.instance.offRouteMeters, 2 * _rec.lastAccuracy);

@@ -217,3 +217,20 @@ Future<List<double>> sessionAltitude(int sessionId, List<TrackPoint> pts) async 
 
 /// Climb and descent for a profile that went through [fuseWithDem] (smoother than raw GPS: 6 m).
 ElevationStats elevationOfFused(List<double> alt) => elevationStats(alt, threshold: 6);
+
+/// Climb and descent of an imported route from the terrain model. The heights are fetched once (internet needed,
+/// only when [allowFetch]) and kept in the route row; without them (offline, never fetched) the result is null.
+Future<ElevationStats?> routeElevationStats(int routeId, List<({double lat, double lon})> pts, {bool allowFetch = true}) async {
+  try {
+    final cached = await TrackDb.instance.routeElevation(routeId);
+    if (cached != null) return elevationOfFused(DemSamples.fromJson(jsonDecode(cached) as Map<String, dynamic>).elev);
+    if (!allowFetch || pts.length < 2) return null;
+    final dem = await fetchDem([for (final p in pts) TrackPoint(0, p.lat, p.lon, 0, 0, 0)]);
+    if (dem == null) return null;
+    await TrackDb.instance.setRouteElevation(routeId, jsonEncode(dem.toJson()));
+    return elevationOfFused(dem.elev);
+  } catch (e) {
+    DebugLog.instance.log('DEM', 'route elevation failed: $e');
+    return null;
+  }
+}

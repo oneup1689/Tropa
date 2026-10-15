@@ -1,19 +1,14 @@
-import 'dart:io';
-
-import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-import 'maps.dart';
+import 'l10n.dart';
 import 'modes.dart';
+import 'readiness.dart';
 import 'recorder.dart';
 import 'settings.dart';
-import 'l10n.dart';
 
-/// Auto-record: recording that starts by itself when the person starts moving (24/7), and the planner: a reminder (and optionally an automatic start of the recording) at a chosen time,
-/// plus a readiness checklist so nothing is forgotten before leaving.
+/// Auto-record: recording that starts by itself when the person starts moving, the readiness of the phone for it,
+/// and the planner (a reminder, and optionally an automatic start, at a chosen time).
 class AutoRecordPage extends StatefulWidget {
   const AutoRecordPage({super.key});
 
@@ -41,25 +36,28 @@ class _PlannedTrip {
       );
 }
 
-class _Check {
-  final String label;
-  final bool ok;
-  final String? hint;
-  final Future<void> Function()? fix;
-
-  _Check(this.label, this.ok, {this.hint, this.fix});
-}
-
-class _AutoRecordPageState extends State<AutoRecordPage> {
+class _AutoRecordPageState extends State<AutoRecordPage> with WidgetsBindingObserver {
   static const _sys = MethodChannel('tropa/system');
   List<_PlannedTrip> trips = [];
-  List<_Check> checks = [];
+  ReadinessResult? ready;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _runChecks();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _runChecks(); // came back from the system settings
   }
 
   void _load() {
@@ -81,34 +79,13 @@ class _AutoRecordPageState extends State<AutoRecordPage> {
   Future<void> _store() => AppSettings.instance.set('trips', [for (final trip in trips) trip.toJson()]);
 
   Future<void> _runChecks() async {
-    final list = <_Check>[];
-    final regions = await MapStore.regions();
-    list.add(_Check(t('Загружена офлайн-карта'), regions.isNotEmpty,
-        hint: regions.isEmpty ? t('Добавьте карту в разделе «Карты»') : t('{p0} шт.', {'p0': regions.length})));
+    final r = await checkReadiness();
+    if (mounted) setState(() => ready = r);
+  }
 
-    try {
-      final level = await Battery().batteryLevel;
-      list.add(_Check(t('Заряд батареи не ниже 50 %'), level >= 50, hint: t('Сейчас {p0} %', {'p0': level})));
-    } catch (_) {}
-
-    final gps = await Geolocator.isLocationServiceEnabled();
-    list.add(_Check(t('GPS включён'), gps, fix: gps ? null : Geolocator.openLocationSettings));
-
-    final always = await Permission.locationAlways.isGranted;
-    list.add(_Check(t('Геолокация «Всегда»'), always,
-        hint: always ? null : t('Нужна для записи с погашенным экраном'),
-        fix: always ? null : () async => openAppSettings()));
-
-    final notif = await Permission.notification.isGranted;
-    list.add(_Check(t('Уведомления разрешены'), notif, fix: notif ? null : () async => Permission.notification.request()));
-
-    if (Platform.isAndroid) {
-      final batt = await Permission.ignoreBatteryOptimizations.isGranted;
-      list.add(_Check(t('Без ограничений батареи'), batt,
-          hint: batt ? null : t('Иначе система может остановить запись'),
-          fix: batt ? null : () async => Permission.ignoreBatteryOptimizations.request()));
-    }
-    if (mounted) setState(() => checks = list);
+  Future<void> _fix(ReadinessItem i) async {
+    await fixReadinessItem(i.id);
+    await _runChecks();
   }
 
   Future<void> _add() async {
@@ -189,8 +166,79 @@ class _AutoRecordPageState extends State<AutoRecordPage> {
     return '${two(d.day)}.${two(d.month)}.${d.year} ${two(d.hour)}:${two(d.minute)}';
   }
 
+  /// The switch and what it means, in two lines.
+  Widget _statusCard(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return ListenableBuilder(
+      listenable: AppSettings.instance,
+      builder: (context, _) {
+        final on = AppSettings.instance.autoMode;
+        return Card(
+          color: on ? cs.primaryContainer : null,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(Icons.motion_photos_auto_outlined, color: on ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(t('Начинать запись автоматически'),
+                      style: text.titleMedium?.copyWith(color: on ? cs.onPrimaryContainer : null)),
+                ),
+                Switch(
+                  value: on,
+                  onChanged: (v) async {
+                    await AppSettings.instance.set('auto_mode', v);
+                    await Recorder.instance.applyAutoMode();
+                  },
+                ),
+              ]),
+              Padding(
+                padding: const EdgeInsets.only(left: 36, right: 8),
+                child: Text(
+                  on
+                      ? t('Включена. Запись начнётся сама, когда вы пойдёте, и закончится через {n} мин без движения. В остальное время GPS выключен.',
+                          {'n': AppSettings.instance.idleMinutes})
+                      : t('Выключена. Включите, и запись будет начинаться сама, когда вы пойдёте: нажимать кнопку не придётся.'),
+                  style: text.bodySmall?.copyWith(color: on ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+                ),
+              ),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+
+  /// "Everything is ready" in one green line, or what to fix (opened by default).
+  Widget _readinessCard(BuildContext context) {
+    final r = ready;
+    final text = Theme.of(context).textTheme;
+    if (r == null) return const SizedBox(height: 56, child: Center(child: CircularProgressIndicator()));
+    final problems = r.problems.length;
+    final title = r.level == ReadyLevel.ready
+        ? t('Телефон готов к записи')
+        : (r.level == ReadyLevel.blocked ? t('Запись не начнётся: нужно поправить') : t('Можно идти, есть замечания: {n}', {'n': problems}));
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        key: ValueKey('ready-${r.level.name}-$problems'),
+        initiallyExpanded: r.level != ReadyLevel.ready,
+        leading: Icon(
+          r.level == ReadyLevel.ready ? Icons.check_circle : (r.level == ReadyLevel.warning ? Icons.warning_amber_rounded : Icons.error),
+          color: readinessColor(r.level),
+        ),
+        title: Text(title, style: text.titleSmall),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [ReadinessBody(result: r, onFix: _fix)],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: Text(t('Автозапись'))),
       floatingActionButton: FloatingActionButton.extended(
@@ -199,45 +247,20 @@ class _AutoRecordPageState extends State<AutoRecordPage> {
         label: Text(t('Запланировать')),
       ),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        // Two ways to record without pressing the button: when the person starts moving (24/7), and at a set time.
-        ListenableBuilder(
-          listenable: AppSettings.instance,
-          builder: (context, _) => Card(
-            child: SwitchListTile(
-              secondary: const Icon(Icons.motion_photos_auto_outlined),
-              title: Text(t('Писать сам, когда начну двигаться')),
-              subtitle: Text(t(
-                  'Запись начнётся сама, когда вы пойдёте, и закончится после нескольких минут без движения. В остальное время GPS выключен и батарея почти не тратится.')),
-              value: AppSettings.instance.autoMode,
-              onChanged: (v) async {
-                await AppSettings.instance.set('auto_mode', v);
-                await Recorder.instance.applyAutoMode();
-              },
-            ),
-          ),
-        ),
+        _statusCard(context),
         const SizedBox(height: 18),
-        Text(t('Готовность к прогулке'), style: Theme.of(context).textTheme.titleMedium),
-        for (final c in checks)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(c.ok ? Icons.check_circle : Icons.error_outline,
-                color: c.ok ? Colors.green : Theme.of(context).colorScheme.error),
-            title: Text(c.label),
-            subtitle: c.hint == null ? null : Text(c.hint!),
-            trailing: c.fix == null
-                ? null
-                : TextButton(
-                    onPressed: () async {
-                      await c.fix!();
-                      await _runChecks();
-                    },
-                    child: Text(t('Исправить')),
-                  ),
+        Text(t('Готовность'), style: text.titleMedium),
+        const SizedBox(height: 6),
+        _readinessCard(context),
+        const SizedBox(height: 18),
+        Text(t('Запланированные прогулки'), style: text.titleMedium),
+        const SizedBox(height: 6),
+        if (trips.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(t('Пока ничего не запланировано. Запись по расписанию: напоминание или автостарт в нужное время.'),
+                style: text.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ),
-        const Divider(),
-        Text(t('Запланированные прогулки'), style: Theme.of(context).textTheme.titleMedium),
-        if (trips.isEmpty) Padding(padding: const EdgeInsets.all(12), child: Text(t('Пока ничего не запланировано'))),
         for (final trip in trips)
           Card(
             child: ListTile(

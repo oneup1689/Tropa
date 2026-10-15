@@ -12,6 +12,18 @@ extension TurnInfo on Turn {
   bool get isLeft => this == Turn.slightLeft || this == Turn.left || this == Turn.sharpLeft;
 }
 
+/// Initial course from point 1 to point 2 in degrees from north (0..360).
+double bearingDeg(double lat1, double lon1, double lat2, double lon2) {
+  final p1 = lat1 * math.pi / 180, p2 = lat2 * math.pi / 180;
+  final dl = (lon2 - lon1) * math.pi / 180;
+  final y = math.sin(dl) * math.cos(p2);
+  final x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl);
+  return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+}
+
+/// "N", "NE", ... for a course in degrees (the caller translates the letters).
+String compassPoint8(double deg) => const ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][((deg + 22.5) % 360 ~/ 45)];
+
 class Maneuver {
   /// Metres from the start of the (possibly reversed) route.
   final double at;
@@ -64,13 +76,7 @@ class RoutePath {
     return out;
   }
 
-  static double _bearing(LatLon a, LatLon b) {
-    final p1 = a.lat * math.pi / 180, p2 = b.lat * math.pi / 180;
-    final dl = (b.lon - a.lon) * math.pi / 180;
-    final y = math.sin(dl) * math.cos(p2);
-    final x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl);
-    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
-  }
+  static double _bearing(LatLon a, LatLon b) => bearingDeg(a.lat, a.lon, b.lat, b.lon);
 
   static double _delta(double from, double to) {
     var d = (to - from) % 360;
@@ -150,7 +156,18 @@ class NavState {
   /// Set only on the update that reaches the finish.
   final bool justArrived;
 
+  /// While the person is still on the way to the start of the route: metres to it and its course from the person.
+  /// Null once the route has begun.
+  final double? toStartM;
+  final double? startBearing;
+
+  /// Set only on the update that reaches the start after the approach.
+  final bool justReachedStart;
+
   const NavState({
+    this.toStartM,
+    this.startBearing,
+    this.justReachedStart = false,
     required this.progressM,
     required this.remainingM,
     required this.offM,
@@ -176,7 +193,13 @@ class NavEngine {
   bool _arrived = false;
   final Set<int> _fired = {};
 
-  NavEngine(this.path, {this.farM = 100, this.nearM = 30}) {
+  /// Reaching the start (within this many metres) ends the approach.
+  static const startRadiusM = 60.0;
+
+  bool _approaching;
+
+  /// With [approach] the route starts counting only when the person gets to its start (or [skipApproach] is called).
+  NavEngine(this.path, {this.farM = 100, this.nearM = 30, bool approach = false}) : _approaching = approach {
     _lat0 = path.pts.first.lat;
     final lon0 = path.pts.first.lon;
     final kx = math.cos(_lat0 * math.pi / 180) * 111320;
@@ -215,6 +238,24 @@ class NavEngine {
       return const NavState(progressM: 0, remainingM: 0, offM: 0, next: null, toNextM: 0, arrived: false);
     }
     final x = (lon - _lon0) * _kx, y = (lat - _lat0) * 111320;
+    var reachedNow = false;
+    if (_approaching) {
+      final d0 = math.sqrt(x * x + y * y); // the start is the origin of the local plane
+      if (d0 > startRadiusM) {
+        return NavState(
+          progressM: 0,
+          remainingM: total,
+          offM: d0,
+          next: path.maneuvers.isEmpty ? null : path.maneuvers.first,
+          toNextM: path.maneuvers.isEmpty ? total : path.maneuvers.first.at,
+          arrived: false,
+          toStartM: d0,
+          startBearing: bearingDeg(lat, lon, path.pts.first.lat, path.pts.first.lon),
+        );
+      }
+      _approaching = false;
+      reachedNow = true;
+    }
     final last = n - 2;
     var r = _started
         ? _nearest(x, y, math.max(0, _seg - 10), math.min(last, _seg + 80))
@@ -270,6 +311,12 @@ class NavEngine {
       arrived: _arrived,
       alert: alert,
       justArrived: just,
+      justReachedStart: reachedNow,
     );
   }
+
+  bool get approaching => _approaching;
+
+  /// The person joins the route somewhere else than at its start: from now on progress follows the nearest part.
+  void skipApproach() => _approaching = false;
 }

@@ -64,6 +64,10 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   double lastLon = 0;
   double offRouteMeters = -1;
 
+  /// The service waits for the person to reach the start of a route; [waitDistM] is the distance to it (-1 unknown).
+  bool waiting = false;
+  double waitDistM = -1;
+
   /// Distance goal of the walk (from the native service while recording; 0 = none), whether it is out-and-back,
   /// and how far it went: 0 = not yet, 1 = half way passed, 2 = reached.
   double goalM = 0;
@@ -165,7 +169,12 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
       autoPaused = paused;
       final isWatching = m['watching'] == true;
       final nav = (m['offRoute'] as num?)?.toDouble() ?? -1;
-      final posChanged = isWatching != watching || (nav - offRouteMeters).abs() > 1;
+      final wait = m['waitingStart'] == true;
+      final waitD = (m['waitDist'] as num?)?.toDouble() ?? -1;
+      final waitChanged = wait != waiting || (waitD - waitDistM).abs() > 20;
+      waiting = wait;
+      waitDistM = waitD;
+      final posChanged = waitChanged || isWatching != watching || (nav - offRouteMeters).abs() > 1;
       watching = isWatching;
       motionSensor = (m['motionSensor'] as String?) ?? 'none';
       activeMode = TravelModeInfo.parse(m['mode'] as String?);
@@ -258,7 +267,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   // ---------------------------------------------------------------- start / stop
 
   /// Parameters the native service needs; the same set is used for manual starts and 24/7 mode.
-  Map<String, Object?> _serviceArgs(TravelMode mode, {int? session, int? routeId}) => {
+  Map<String, Object?> _serviceArgs(TravelMode mode, {int? session, int? routeId, bool approach = false}) => {
+        'approach': approach,
         'session': session ?? 0,
         'maxAccuracy': AppSettings.instance.maxAccuracyM,
         'intervalMs': AppSettings.instance.fixIntervalMsFor(mode),
@@ -296,6 +306,28 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Waits (in the service, so also with the screen off) until the person is at [lat],[lon]; the recording along
+  /// the route then starts by itself. Android only.
+  Future<bool> startWait({required int routeId, required double lat, required double lon, TravelMode? mode, double radius = 50}) async {
+    if (!Platform.isAndroid || recording) return false;
+    final m = mode ?? AppSettings.instance.travelMode;
+    interrupted = null;
+    _log.log('WAIT', 'UI waits for the start of route $routeId at $lat,$lon');
+    await _sys.invokeMethod('waitStart', {..._serviceArgs(m, routeId: routeId), 'lat': lat, 'lon': lon, 'radius': radius});
+    for (var i = 0; i < 10 && !waiting; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await _refresh();
+    }
+    return waiting;
+  }
+
+  /// Stops waiting for the start of a route (nothing was recorded).
+  Future<void> cancelWait() async {
+    if (!Platform.isAndroid) return;
+    await _sys.invokeMethod('stopTracking');
+    await _refresh();
+  }
+
   /// Applies the "Автозапись 24/7" setting: starts or stops the movement watcher.
   /// The step counter needs the "physical activity" permission.
   Future<void> applyAutoMode() async {
@@ -312,7 +344,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     await _refresh();
   }
 
-  Future<bool> start({int? resumeSessionId, TravelMode? chosenMode, int? routeId}) async {
+  Future<bool> start({int? resumeSessionId, TravelMode? chosenMode, int? routeId, bool approach = false}) async {
     if (recording) return true;
     // A resumed walk keeps the mode it was recorded in.
     final mode = resumeSessionId != null
@@ -331,7 +363,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _log.log('START', 'UI requested start resume=${resumeSessionId != null} perm=$perm ${await _batteryInfo()}');
 
     if (Platform.isAndroid) {
-      final args = _serviceArgs(mode, session: resumeSessionId, routeId: routeId);
+      final args = _serviceArgs(mode, session: resumeSessionId, routeId: routeId, approach: approach);
       if (pendingGoalM > 0) {
         args.addAll(_goalArgs(pendingGoalM, pendingGoalRound));
         _log.log('GOAL', 'start with goal ${pendingGoalM.round()} m roundTrip=$pendingGoalRound');

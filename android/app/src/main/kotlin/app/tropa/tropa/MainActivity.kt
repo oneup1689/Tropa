@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
             .putExtra(TrackingService.EXTRA_IDLE_MIN, (call.argument<Number>("idleMinutes"))?.toInt() ?: 5)
             .putExtra(TrackingService.EXTRA_OFFROUTE_M, (call.argument<Number>("offRouteM"))?.toFloat() ?: 40f)
             .putExtra(TrackingService.EXTRA_ROUTE, (call.argument<Number>("routeId"))?.toLong() ?: 0L)
+            .putExtra("approach", call.argument<Boolean>("approach") ?: false)
             .putExtra("lang", call.argument<String>("lang") ?: "ru")
             .putExtra(TrackingService.EXTRA_GOAL_M, (call.argument<Number>("goalM"))?.toDouble() ?: 0.0)
             .putExtra(TrackingService.EXTRA_GOAL_ROUND, call.argument<Boolean>("goalRound") ?: false)
@@ -118,6 +119,28 @@ class MainActivity : FlutterActivity() {
                     "startTracking" -> {
                         launch(serviceIntent(call, TrackingService.ACTION_START))
                         result.success(null)
+                    }
+                    "waitStart" -> {
+                        launch(
+                            serviceIntent(call, TrackingService.ACTION_WAIT_START)
+                                .putExtra(TrackingService.EXTRA_WAIT_LAT, (call.argument<Number>("lat"))?.toDouble() ?: 0.0)
+                                .putExtra(TrackingService.EXTRA_WAIT_LON, (call.argument<Number>("lon"))?.toDouble() ?: 0.0)
+                                .putExtra(TrackingService.EXTRA_WAIT_R, (call.argument<Number>("radius"))?.toFloat() ?: 50f)
+                        )
+                        result.success(null)
+                    }
+                    "openGeo" -> {
+                        // Opens a point in any map app of the phone (the app does not route to a start itself).
+                        val lat = (call.argument<Number>("lat"))?.toDouble() ?: 0.0
+                        val lon = (call.argument<Number>("lon"))?.toDouble() ?: 0.0
+                        val label = android.net.Uri.encode(call.argument<String>("label") ?: "")
+                        val uri = android.net.Uri.parse("geo:$lat,$lon?q=$lat,$lon($label)")
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
                     }
                     "stopTracking" -> {
                         startService(Intent(this, TrackingService::class.java).setAction(TrackingService.ACTION_STOP))

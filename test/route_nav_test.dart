@@ -83,6 +83,33 @@ void main() {
     expect(s.progressM, closeTo(100, 15));
   });
 
+  test('approach: leads to the start, then the route begins and the arrival is reported once', () {
+    final nav = NavEngine(RoutePath.build(lShape), approach: true);
+    // 500 m south of the start: still approaching, progress stays 0.
+    var s = nav.update(_p(-500, 0).lat, _p(-500, 0).lon);
+    expect(s.toStartM, closeTo(500, 10));
+    expect(s.progressM, 0);
+    expect(s.startBearing, closeTo(0, 3)); // the start is to the north
+    expect(s.justReachedStart, isFalse);
+    // Walking up to the start.
+    s = nav.update(_p(-30, 0).lat, _p(-30, 0).lon);
+    expect(s.toStartM, isNull);
+    expect(s.justReachedStart, isTrue);
+    s = nav.update(_p(10, 0).lat, _p(10, 0).lon);
+    expect(s.justReachedStart, isFalse);
+    expect(s.progressM, closeTo(10, 8));
+  });
+
+  test('approach can be skipped to join the route elsewhere', () {
+    final nav = NavEngine(RoutePath.build(lShape), approach: true);
+    var s = nav.update(_p(200, 0).lat, _p(200, 0).lon);
+    expect(s.toStartM, isNotNull);
+    nav.skipApproach();
+    s = nav.update(_p(200, 0).lat, _p(200, 0).lon);
+    expect(s.toStartM, isNull);
+    expect(s.progressM, closeTo(200, 10));
+  });
+
   test('a loop does not jump to the end at the start point', () {
     final loop = _route([(0, 0), (300, 0), (300, 300), (0, 300), (0, 0)]);
     final nav = NavEngine(RoutePath.build(loop));

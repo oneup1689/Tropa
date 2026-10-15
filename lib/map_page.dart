@@ -157,6 +157,9 @@ class _MapPageState extends State<MapPage> {
   /// "Where am I": shows the own marker (green disc with the arrow of the movement direction, in the colours of the
   /// app) and keeps the camera on it; a second tap lets the camera go, a third follows again. The camera also lets go
   /// when the person drags the map away.
+  /// "Where am I" is on the Map tab and on the map of a saved route (to see yourself against the route).
+  bool get _canLocate => widget.tab || (widget.routeId != null && widget.sessionId == null && !widget.live && widget.posterCapture == null);
+
   Future<void> _locate() async {
     if (_locating && _following) {
       setState(() => _following = false);
@@ -267,26 +270,33 @@ class _MapPageState extends State<MapPage> {
     await _controller?.setGeoJsonSource('locator', _fc(const []));
   }
 
-  /// The marker pictures, drawn in the colours of the app: sand ring, deep-green disc, orange dot or arrow.
+  /// The marker pictures in the colours of the app: an orange arrow with a sand outline and a soft shadow (when the
+  /// direction is known), or an orange dot with a sand ring.
   Future<Uint8List> _markerPng({required bool arrow}) async {
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
     const mid = Offset(48, 48);
-    c.drawCircle(mid + const Offset(0, 2.5), 31, Paint()..color = const Color(0x40000000));
-    c.drawCircle(mid, 31, Paint()..color = brandSand);
-    c.drawCircle(mid, 25, Paint()..color = brandGreen);
     if (arrow) {
+      final shape = Path()
+        ..moveTo(48, 12)
+        ..lineTo(70, 78)
+        ..lineTo(48, 64)
+        ..lineTo(26, 78)
+        ..close();
+      c.drawPath(shape.shift(const Offset(0, 3)), Paint()..color = const Color(0x40000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
       c.drawPath(
-        Path()
-          ..moveTo(48, 22)
-          ..lineTo(62, 62)
-          ..lineTo(48, 54)
-          ..lineTo(34, 62)
-          ..close(),
-        Paint()..color = brandAccent,
+        shape,
+        Paint()
+          ..color = brandSand
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 9
+          ..strokeJoin = StrokeJoin.round,
       );
+      c.drawPath(shape, Paint()..color = brandAccent);
     } else {
-      c.drawCircle(mid, 9, Paint()..color = brandAccent);
+      c.drawCircle(mid + const Offset(0, 2.5), 22, Paint()..color = const Color(0x40000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+      c.drawCircle(mid, 22, Paint()..color = brandSand);
+      c.drawCircle(mid, 14, Paint()..color = brandAccent);
     }
     final img = await rec.endRecording().toImage(96, 96);
     return (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
@@ -749,7 +759,7 @@ class _MapPageState extends State<MapPage> {
       await _capturePosterMap(c);
       return;
     }
-    if (widget.tab) {
+    if (_canLocate) {
       await c.addImage('me-dot', await _markerPng(arrow: false));
       await c.addImage('me-arrow', await _markerPng(arrow: true));
     }
@@ -937,10 +947,10 @@ class _MapPageState extends State<MapPage> {
                         label: Text(t('Весь маршрут')),
                       ),
                     ),
-                  if (widget.tab)
+                  if (_canLocate)
                     Positioned(
                       right: 12,
-                      bottom: 28,
+                      bottom: widget.tab ? 28 : 100, // on a route map the "Whole route" button sits below
                       child: FloatingActionButton(
                         heroTag: 'map-locate',
                         tooltip: t('Где я'),

@@ -25,6 +25,17 @@ Future<NetInfo?> networkInfo() async {
   }
 }
 
+/// Opens a point in a map app of the phone (to find the way to it: Tropa itself has no road routing).
+Future<bool> openInMaps(double lat, double lon, String label) async {
+  if (!Platform.isAndroid) return false;
+  try {
+    return (await _channel.invokeMethod<bool>('openGeo', {'lat': lat, 'lon': lon, 'label': label})) == true;
+  } catch (e) {
+    DebugLog.instance.log('NET', 'cannot open maps: $e');
+    return false;
+  }
+}
+
 /// Free bytes in the folder where the maps are kept, or null when it cannot be told.
 Future<int?> freeStorageBytes() async {
   if (!Platform.isAndroid) return null;

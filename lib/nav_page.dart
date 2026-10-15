@@ -10,6 +10,18 @@ import 'route_navigator.dart';
 import 'settings.dart';
 import 'units.dart';
 
+/// "север", "северо-восток", ... for a course in degrees (in the language of the app).
+String compassWord(double deg) => switch (compassPoint8(deg)) {
+      'N' => t('север'),
+      'NE' => t('северо-восток'),
+      'E' => t('восток'),
+      'SE' => t('юго-восток'),
+      'S' => t('юг'),
+      'SW' => t('юго-запад'),
+      'W' => t('запад'),
+      _ => t('северо-запад'),
+    };
+
 /// The navigation screen: what to do next, how far to the turn and to the finish. The walk is recorded all the time.
 class NavPage extends StatefulWidget {
   const NavPage({super.key});
@@ -94,7 +106,12 @@ class _NavPageState extends State<NavPage> {
 
     IconData icon;
     String big, small;
-    if (arrived) {
+    final toStart = s?.toStartM;
+    if (toStart != null) {
+      icon = Icons.near_me;
+      big = Units.dist(toStart, digits: toStart < 1000 ? 2 : 1);
+      small = t('до старта, направление: {dir}', {'dir': compassWord(s!.startBearing ?? 0)});
+    } else if (arrived) {
       icon = Icons.flag;
       big = t('Вы на месте');
       small = t('Можно завершить прогулку');
@@ -139,8 +156,20 @@ class _NavPageState extends State<NavPage> {
             ]),
           ),
         ),
+        if (toStart != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: nav.skipApproach,
+                icon: const Icon(Icons.login),
+                label: Text(t('Я уже на маршруте, начать здесь')),
+              ),
+            ),
+          ),
         const SizedBox(height: 12),
-        if (s != null) ...[
+        if (s != null && toStart == null) ...[
           LinearProgressIndicator(value: (s.progressM / (s.progressM + s.remainingM).clamp(1, double.infinity)).clamp(0.0, 1.0), minHeight: 8),
           const SizedBox(height: 12),
         ],

@@ -22,6 +22,12 @@ class RouteGuard(private val context: Context) {
 
     val loaded: Boolean get() = lat != null
 
+    /**
+     * False while the walker is still on the way to the route (started recording away from it): no "left the route"
+     * warnings until the route has been reached once.
+     */
+    var armed = true
+
     fun load(database: SQLiteDatabase, routeId: Long, threshold: Float) {
         clear()
         if (routeId <= 0) return
@@ -91,6 +97,13 @@ class RouteGuard(private val context: Context) {
         val d = distanceTo(pLat, pLon)
         lastDistance = d
         val threshold = max(base, acc * 2f).toDouble()
+        if (!armed) {
+            if (d <= threshold) {
+                armed = true
+                TrackingDb.log(context, "NAV", "route reached, off-route warnings are on")
+            }
+            return
+        }
         if (d > threshold && (movingNow || offCount > 0)) {
             if (offCount == 0) offStartWall = now
             offCount++

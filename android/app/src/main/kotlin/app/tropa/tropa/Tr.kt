@@ -38,6 +38,11 @@ object Tr {
         "Похоже, вы едете" to "It looks like you are driving",
         "Выбран режим «Пешком». Переключить на «Смешанный» (пешком и транспорт)?" to "Walk mode is selected. Switch to Mixed (walking and vehicle)?",
         "Переключить на Смешанный" to "Switch to Mixed",
+        "Ждём вас у старта маршрута" to "Waiting for you at the route start",
+        "Запись началась у старта" to "Recording started at the start",
+        "Идите по маршруту." to "Follow the route.",
+        "GPS выключен — запись не начнётся" to "GPS is off — recording will not start",
+        "Включите геолокацию: приложение ждёт вас у старта маршрута." to "Turn on location: the app is waiting for you at the route start.",
     )
 
     fun setLanguage(ctx: Context, code: String) {
@@ -58,6 +63,11 @@ object Tr {
 
     fun goalHalf(ctx: Context, halfLabel: String): String =
         if (isEnglish(ctx)) "Time to turn around: $halfLabel back to reach the goal." else "Пора разворачиваться: обратно ещё $halfLabel до цели."
+
+    fun waitingStart(ctx: Context, meters: Double): String {
+        val d = if (meters >= 1000) "%.1f km".format(meters / 1000) else "${meters.toInt()} m"
+        return if (isEnglish(ctx)) "Waiting for you at the start: $d" else "Ждём вас у старта: ${d.replace("km", "км").replace(" m", " м")}"
+    }
 
     fun points(ctx: Context, count: Int, km: String): String =
         if (isEnglish(ctx)) "Points: $count · $km km" else "Точек: $count · $km км"

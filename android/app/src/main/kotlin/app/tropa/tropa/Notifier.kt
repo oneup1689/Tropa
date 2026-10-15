@@ -17,6 +17,7 @@ object Notifier {
     const val ROUTE_ALERT_ID = 1003
     const val GOAL_ID = 1004
     const val MODE_HINT_ID = 1005
+    const val WAIT_ID = 1006
 
     private fun manager(c: Context) = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 

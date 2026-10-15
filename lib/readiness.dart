@@ -286,7 +286,6 @@ class _ReadinessSheetState extends State<ReadinessSheet> with WidgetsBindingObse
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final title = switch (result.level) {
       ReadyLevel.ready => t('Всё готово к прогулке'),
@@ -305,40 +304,80 @@ class _ReadinessSheetState extends State<ReadinessSheet> with WidgetsBindingObse
             Expanded(child: Text(title, style: tt.titleLarge)),
           ]),
           const SizedBox(height: 14),
-          for (final i in result.problems)
-            Card(
-              color: i.blocker ? cs.errorContainer : cs.surfaceContainerHigh,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Icon(i.blocker ? Icons.error_outline : Icons.warning_amber_rounded, size: 20, color: i.blocker ? cs.error : Colors.amber.shade800),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(i.title, style: tt.titleSmall)),
-                  ]),
-                  const SizedBox(height: 4),
-                  Text(i.detail, style: tt.bodySmall),
-                  if (i.fixLabel != null) ...[
-                    const SizedBox(height: 8),
-                    Align(alignment: Alignment.centerRight, child: FilledButton.tonal(onPressed: () => _fix(i), child: Text(i.fixLabel!))),
-                  ],
-                ]),
-              ),
-            ),
-          if (result.items.any((i) => i.ok)) ...[
-            const SizedBox(height: 6),
-            for (final i in result.items.where((i) => i.ok))
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(children: [
-                  const Icon(Icons.check_circle, size: 20, color: Color(0xFF2E9E6B)),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(i.title, style: tt.bodyMedium)),
-                ]),
-              ),
-          ],
+          ReadinessBody(result: result, onFix: _fix),
         ]),
       ),
     );
   }
+}
+
+/// The problems with their fix buttons, then what is fine (shared by the sheet and the Auto-record screen).
+class ReadinessBody extends StatelessWidget {
+  final ReadinessResult result;
+  final void Function(ReadinessItem item) onFix;
+
+  const ReadinessBody({super.key, required this.result, required this.onFix});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final i in result.problems)
+        Card(
+          color: i.blocker ? cs.errorContainer : cs.surfaceContainerHigh,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(i.blocker ? Icons.error_outline : Icons.warning_amber_rounded, size: 20, color: i.blocker ? cs.error : Colors.amber.shade800),
+                const SizedBox(width: 8),
+                Expanded(child: Text(i.title, style: tt.titleSmall)),
+              ]),
+              const SizedBox(height: 4),
+              Text(i.detail, style: tt.bodySmall),
+              if (i.fixLabel != null) ...[
+                const SizedBox(height: 8),
+                Align(alignment: Alignment.centerRight, child: FilledButton.tonal(onPressed: () => onFix(i), child: Text(i.fixLabel!))),
+              ],
+            ]),
+          ),
+        ),
+      if (result.items.any((i) => i.ok)) ...[
+        const SizedBox(height: 6),
+        for (final i in result.items.where((i) => i.ok))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 5),
+            child: Row(children: [
+              const Icon(Icons.check_circle, size: 20, color: Color(0xFF2E9E6B)),
+              const SizedBox(width: 10),
+              Expanded(child: Text(i.title, style: tt.bodyMedium)),
+            ]),
+          ),
+      ],
+    ]);
+  }
+}
+
+/// Checks the phone before a recording starts. When something blocks it, tells exactly what and offers the fix;
+/// returns true when the recording may start. (After a fix the person presses "Start" again: system permission
+/// screens answer later.)
+Future<bool> ensureCanStart(BuildContext context) async {
+  final r = await checkReadiness();
+  final blocker = r.problems.where((i) => i.blocker).firstOrNull;
+  if (blocker == null) return true;
+  if (!context.mounted) return false;
+  final fix = await showDialog<bool>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: Text(t('Запись не начнётся: {r}', {'r': blocker.title})),
+      content: Text('${blocker.detail}\n\n${t('После исправления нажмите «Начать» ещё раз.')}'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c, false), child: Text(t('Отмена'))),
+        if (blocker.fixLabel != null) FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(blocker.fixLabel!)),
+      ],
+    ),
+  );
+  if (fix == true) await fixReadinessItem(blocker.id);
+  return false;
 }

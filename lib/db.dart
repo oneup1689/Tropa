@@ -70,7 +70,7 @@ class TrackDb {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'tropa.db'),
-      version: 7,
+      version: 8,
       onUpgrade: (db, oldVersion, _) async {
         // The native service may already have added some columns; ignore duplicates.
         if (oldVersion < 2) {
@@ -93,6 +93,15 @@ class TrackDb {
         if (oldVersion < 7) {
           try {
             await db.execute('ALTER TABLE session_meta ADD COLUMN title TEXT');
+          } catch (_) {}
+        }
+        if (oldVersion < 8) {
+          // The route a walk followed, and elevations of a route (fetched once, kept).
+          try {
+            await db.execute('ALTER TABLE session_meta ADD COLUMN route_id INTEGER');
+          } catch (_) {}
+          try {
+            await db.execute('ALTER TABLE routes ADD COLUMN elevation TEXT');
           } catch (_) {}
         }
       },
@@ -120,9 +129,10 @@ class TrackDb {
         'session_id INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, mode TEXT NOT NULL)');
     // Poster data fetched from the internet once and kept: place name, weather (JSON), manual water temperature.
     await db.execute('CREATE TABLE IF NOT EXISTS session_meta('
-        'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT, title TEXT)');
+        'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT, title TEXT, '
+        'route_id INTEGER)');
     await db.execute('CREATE TABLE IF NOT EXISTS routes('
-        'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL)');
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL, elevation TEXT)');
     await db.execute('CREATE TABLE IF NOT EXISTS route_points('
         'route_id INTEGER NOT NULL, idx INTEGER NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, '
         'PRIMARY KEY (route_id, idx))');
@@ -377,6 +387,29 @@ class TrackDb {
     final db = await database;
     await db.delete('route_points', where: 'route_id = ?', whereArgs: [id]);
     await db.delete('routes', where: 'id = ?', whereArgs: [id]);
+    await db.update('session_meta', {'route_id': null}, where: 'route_id = ?', whereArgs: [id]);
+  }
+
+  /// Finished walks that followed the route (newest first): how many times and when it was last walked.
+  Future<List<({int sessionId, int startMs})>> routeWalks(int routeId) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        'SELECT s.id AS id, s.start_ms AS start_ms FROM sessions s JOIN session_meta m ON m.session_id = s.id '
+        "WHERE m.route_id = ? AND s.status != 'active' ORDER BY s.start_ms DESC",
+        [routeId]);
+    return [for (final r in rows) (sessionId: r['id'] as int, startMs: r['start_ms'] as int)];
+  }
+
+  /// Elevations of the route sampled along it (JSON of the DEM samples), or null when not fetched yet.
+  Future<String?> routeElevation(int routeId) async {
+    final db = await database;
+    final rows = await db.query('routes', columns: ['elevation'], where: 'id = ?', whereArgs: [routeId]);
+    return rows.isEmpty ? null : rows.first['elevation'] as String?;
+  }
+
+  Future<void> setRouteElevation(int routeId, String json) async {
+    final db = await database;
+    await db.update('routes', {'elevation': json}, where: 'id = ?', whereArgs: [routeId]);
   }
 }
 

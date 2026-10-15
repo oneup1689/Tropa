@@ -35,7 +35,7 @@ import java.util.Calendar
  */
 class TrackingService : Service(), LocationListener, SensorEventListener {
 
-    enum class State { IDLE, WATCH, PROBE, RECORD }
+    enum class State { IDLE, WATCH, PROBE, RECORD, WAIT }
 
     companion object {
         const val ACTION_START = "app.tropa.tropa.START"
@@ -46,6 +46,11 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         const val ACTION_RESUME = "app.tropa.tropa.RESUME"
         const val ACTION_GOAL = "app.tropa.tropa.GOAL"
         const val ACTION_SET_MODE = "app.tropa.tropa.SET_MODE"
+        const val ACTION_WAIT_START = "app.tropa.tropa.WAIT_START"
+        const val EXTRA_WAIT_LAT = "waitLat"
+        const val EXTRA_WAIT_LON = "waitLon"
+        const val EXTRA_WAIT_R = "waitRadius"
+        private const val WAIT_INTERVAL_MS = 10_000L
         const val EXTRA_GOAL_M = "goalM"
         const val EXTRA_GOAL_ROUND = "goalRound"
         const val EXTRA_GOAL_LABEL = "goalLabel"
@@ -102,8 +107,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         @Volatile var goalM = 0.0 // distance goal of this walk in metres, 0 = none
         @Volatile var goalRound = false // out-and-back: the half-way notification asks to turn around
         @Volatile var goalStage = 0 // 0 = not yet, 1 = half passed, 2 = goal reached
+        @Volatile var waitingStart = false // waiting for the person to arrive at the start of a route (then recording begins)
+        @Volatile var waitDistM = -1.0 // distance to that start, -1 = unknown yet
 
         fun status(): Map<String, Any> = mapOf(
+            "waitingStart" to waitingStart,
+            "waitDist" to waitDistM,
             "running" to running,
             "watching" to watching,
             "session" to sessionId,
@@ -225,7 +234,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopRequested = true
-                if (state == State.RECORD) stopRecording() else if (!autoEnabled()) shutdown()
+                if (state == State.RECORD) stopRecording() else if (state == State.WAIT) cancelWait() else if (!autoEnabled()) shutdown()
                 return if (autoEnabled()) START_STICKY else START_NOT_STICKY
             }
             ACTION_PAUSE -> {
@@ -271,6 +280,16 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 prefs.edit().putBoolean(KEY_AUTO, true).apply()
                 if (state != State.RECORD) enterWatch()
             }
+            intent?.action == ACTION_WAIT_START -> {
+                if (state == State.RECORD) return START_STICKY
+                prefs.edit()
+                    .putBoolean("wait_active", true)
+                    .putLong("wait_lat_d", java.lang.Double.doubleToRawLongBits(intent.getDoubleExtra(EXTRA_WAIT_LAT, 0.0)))
+                    .putLong("wait_lon_d", java.lang.Double.doubleToRawLongBits(intent.getDoubleExtra(EXTRA_WAIT_LON, 0.0)))
+                    .putFloat("wait_r", intent.getFloatExtra(EXTRA_WAIT_R, 50f))
+                    .apply()
+                enterWait(prefs)
+            }
             intent?.action == ACTION_START -> {
                 if (state == State.RECORD) return START_STICKY
                 startRecording(intent.getLongExtra(EXTRA_SESSION, 0L), auto = false, restarted = false)
@@ -281,6 +300,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 val saved = prefs.getLong(KEY_SESSION, 0L)
                 if (saved > 0) {
                     startRecording(saved, auto = false, restarted = true)
+                } else if (prefs.getBoolean("wait_active", false)) {
+                    enterWait(prefs)
                 } else if (autoEnabled()) {
                     enterWatch()
                 } else {
@@ -337,7 +358,62 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         }
         if (intent != null && intent.hasExtra(EXTRA_ROUTE)) {
             val routeId = intent.getLongExtra(EXTRA_ROUTE, 0L)
-            prefs.edit().putLong("route_id", routeId).apply()
+            // "approach": recording starts away from the route; no "left the route" warnings until it is reached.
+            prefs.edit().putLong("route_id", routeId).putBoolean("route_approach", intent.getBooleanExtra("approach", false)).apply()
+        }
+    }
+
+    // ------------------------------------------------------------------ waiting at the start of a route
+
+    private var waitLat = 0.0
+    private var waitLon = 0.0
+    private var waitRadius = 50f
+
+    /** Recording is not started yet: GPS is polled slowly and the walk begins when the person reaches the start. */
+    private fun enterWait(prefs: android.content.SharedPreferences) {
+        waitLat = java.lang.Double.longBitsToDouble(prefs.getLong("wait_lat_d", 0L))
+        waitLon = java.lang.Double.longBitsToDouble(prefs.getLong("wait_lon_d", 0L))
+        waitRadius = prefs.getFloat("wait_r", 50f)
+        stopLocation()
+        unregisterMotionSensors()
+        state = State.WAIT
+        waitingStart = true
+        waitDistM = -1.0
+        running = false
+        watching = false
+        acquireWakeLock(0)
+        updateNotification(Tr.t(this, "Ждём вас у старта маршрута"))
+        ensureHeartbeat()
+        requestUpdates(WAIT_INTERVAL_MS)
+        log(this, "WAIT", "waiting for the route start at $waitLat,$waitLon (radius ${waitRadius.toInt()} m)")
+    }
+
+    private fun cancelWait() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("wait_active", false).apply()
+        waitingStart = false
+        waitDistM = -1.0
+        Notifier.cancel(this, Notifier.WAIT_ID)
+        log(this, "WAIT", "cancelled")
+        if (autoEnabled()) enterWatch() else shutdown()
+    }
+
+    private fun handleWaitFix(loc: Location) {
+        val acc = if (loc.hasAccuracy()) loc.accuracy else 99f
+        lastFixAt = System.currentTimeMillis()
+        val d = FloatArray(1)
+        Location.distanceBetween(loc.latitude, loc.longitude, waitLat, waitLon, d)
+        waitDistM = d[0].toDouble()
+        if (alertActive) {
+            alertActive = false
+            Notifier.cancel(this, Notifier.ALERT_ID)
+        }
+        // A poor fix must not start the walk by mistake: count the accuracy against the radius.
+        if (acc <= 60f && d[0] <= waitRadius + acc / 2) {
+            log(this, "WAIT", "arrived at the start (${d[0].toInt()} m, accuracy ${acc.toInt()} m): recording")
+            val buffered = Location(loc)
+            startRecording(0L, auto = false, restarted = false)
+            storeBufferedFix(buffered)
+            Notifier.postAlert(this, Notifier.WAIT_ID, Tr.t(this, "Запись началась у старта"), Tr.t(this, "Идите по маршруту."), "📍", "hint")
         }
     }
 
@@ -528,7 +604,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         lastFixAt = lastFixWall
         sessionDay = dayOf(System.currentTimeMillis())
         route.load(database, prefs.getLong("route_id", 0L), offRouteBase)
+        route.armed = !prefs.getBoolean("route_approach", false)
         offRouteM = -1.0
+        waitingStart = false
+        waitDistM = -1.0
+        prefs.edit().putBoolean("wait_active", false).apply()
+        Notifier.cancel(this, Notifier.WAIT_ID)
 
         acquireWakeLock(0)
         state = State.RECORD
@@ -821,6 +902,10 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             handleProbeFix(loc)
             return
         }
+        if (state == State.WAIT) {
+            handleWaitFix(loc)
+            return
+        }
         if (state != State.RECORD) return
 
         val now = System.currentTimeMillis()
@@ -1089,6 +1174,17 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
                 return
             }
             State.IDLE -> return
+            State.WAIT -> {
+                beatCount++
+                val gpsOn = (getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
+                if (!gpsOn) {
+                    raiseAlert(Tr.t(this, "GPS выключен — запись не начнётся"), Tr.t(this, "Включите геолокацию: приложение ждёт вас у старта маршрута."))
+                } else if (waitDistM >= 0 && beatCount % 3 == 0) {
+                    updateNotification(Tr.waitingStart(this, waitDistM))
+                    log(this, "WAIT", "distance to the start ${waitDistM.toInt()} m")
+                }
+                return
+            }
             State.RECORD -> {}
         }
 
@@ -1176,6 +1272,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         releaseWakeLock()
         running = false
         watching = false
+        waitingStart = false
         lowPower = false
         state = State.IDLE
         db?.close()

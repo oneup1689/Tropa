@@ -99,9 +99,12 @@ adb shell am start -n "$pkg/.MainActivity" | Out-Null
 Start-Sleep 30
 TapLabel "^Routes" | Out-Null   # since v26.1 the routes are the "Routes" switch of the Trails tab
 Start-Sleep 2
-TapLabel "^Follow the route" | Out-Null   # the first (only) route of the list
+adb emu geo fix 105.8560 21.0300 | Out-Null   # v28: the start flow asks where the phone is; it must be at the route start
 Start-Sleep 3
-Start-Sleep 5
+TapLabel "emu-test" | Out-Null   # a route opens its own screen first
+Start-Sleep 3
+TapLabel "^Follow the route" | Out-Null
+Start-Sleep 14   # position lookup (up to 8 s) before the recording starts
 adb emu geo fix 105.8560 21.0300 | Out-Null
 Start-Sleep 3
 $pos = Walk 105.8560 21.0300 8 0.00004 0.00002          # along the route
