@@ -1,5 +1,9 @@
 # Презентация Tropa (сделана 2026-10-15)
 
+**Готовые файлы (личные, не в публичном репозитории):** `dist/presentation/Tropa.pptx` (редактируемый, 8 слайдов, шрифты Unbounded и Rubik: в Google Slides есть, в PowerPoint нужно установить) и `dist/presentation/Tropa.pdf` (8 страниц, вид как у веб-версии). Копии: приватный репозиторий `tropa-testdata`, папка `presentation/files/`. В Google Drive автоматически загрузить не вышло (инструмент Drive принимает файл только текстом base64, мегабайты не пройдут): владелец загружает файлы вручную, .pptx в Google Диске открывается как Google Презентация.
+
+Сборка: `tools/presentation_pptx/` (`assets.py` рисует рамки телефонов, фон и логотип, `build.js` собирает .pptx через pptxgenjs (npm, ставится во временную папку), `mkpdf.py` делает HTML для печати в PDF; PDF печатается Microsoft Edge в режиме `--headless --print-to-pdf`). Проверка .pptx: только структурная (XML корректен); в PowerPoint/LibreOffice вид не проверялся.
+
 Живая версия (тип «Slides» на claude.ai, приватная): https://claude.ai/artifact/Dik3bcZCBCC3Eur1jGYp9j
 
 Здесь лежат исходники слайдов и скрипты сборки. Картинки (постеры, скриншоты с телефона, фото) личные и в этот публичный репозиторий не входят: они в приватном репозитории `oneup1689/tropa-testdata` (локально `..\Tropa_testdata\presentation\`).
