@@ -66,3 +66,6 @@ test/*.jpg
 
 # Design experiments (logo lab, sketches): local only
 logo_lab/
+
+# Presentation material (personal photos and rendered demo posters): local only
+Фото для презентации/

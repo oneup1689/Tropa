@@ -1,0 +1,18 @@
+{
+  "v": 4,
+  "createdOnFiles": {"v": 1, "at": "2026-10-15T12:00:00Z"},
+  "lists": "css",
+  "title": "Tropa — трекер маршрутов",
+  "order": ["cover", "record", "nav", "auto", "share", "trio", "pro", "finale"],
+  "sections": {
+    "s1": {"description": "Знакомство: что такое Tropa", "start": "cover"},
+    "s2": {"description": "Что умеет приложение: запись, навигатор, автозапись, шаринг", "start": "record"},
+    "s3": {"description": "Постеры: главный результат", "start": "trio"},
+    "s4": {"description": "Итог", "start": "finale"}
+  },
+  "faces": {
+    "unbounded": {"family": "Unbounded", "href": "https://fonts.googleapis.com/css2?family=Unbounded:wght@400..800&display=swap"},
+    "rubik": {"family": "Rubik", "href": "https://fonts.googleapis.com/css2?family=Rubik:wght@300..700&display=swap"}
+  },
+  "designSystems": []
+}
