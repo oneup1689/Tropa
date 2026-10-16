@@ -7,6 +7,9 @@ description: Run, drive and tear down the Android emulator for Tropa tests (star
 
 Owner's PC has little RAM: never leave heavy processes running after the work.
 
+## 0. Fast path (since 2026-10-16): `tools\emu_run.ps1`
+Prefer the one script to doing steps by hand: `powershell -NoProfile -File tools\emu_run.ps1 -List`, then e.g. `-Tests nav,wait24,delete-guard,notes-after,settings -Cleanup` (core = `emu_check.ps1`, ~6 min, after changes of the native service; `all` runs everything; `-Wipe` = clean image). It starts the emulator if needed, installs the debug APK, whitelists the app from battery optimisation, runs the chosen scenarios (`tools\emu\*.ps1`, helpers in `lib.ps1`), writes `dist\emu_result.json` and keeps screenshots of failed checks only (`%TEMP%	ropa_emu`); read the short table and the JSON, not the whole log. `-Cleanup` closes the emulator, adb and Gradle. A new scenario is a new file with `Test-Run` and `Check $s "name" $condition`. The manual steps below are for work the scenarios do not cover. Note: the userdata image was deleted on 2026-10-16 (the owner agreed); the first start recreates it and is slower.
+
 ## 1. Start (only if not already running; `adb devices` first)
 ```powershell
 $env:Path += ";$env:LOCALAPPDATA\Android\Sdk\platform-tools;$env:LOCALAPPDATA\Android\Sdk\emulator"
