@@ -189,9 +189,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  bool _wasRecording = false;
+
   void _onChange() {
     if (!mounted) return;
     setState(() {});
+    // A walk ended (also from the navigation screen or the notification): the list must show it as finished.
+    if (_wasRecording && !rec.recording) _reload();
+    _wasRecording = rec.recording;
     // GPS switched on or off in the phone: the indicator follows at once.
     if (_lastGps != rec.gpsEnabled) {
       _lastGps = rec.gpsEnabled;

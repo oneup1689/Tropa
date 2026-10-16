@@ -38,6 +38,9 @@ class RouteMapView extends StatefulWidget {
   /// the map; "Где я" brings it back.
   final bool follow;
 
+  /// Draw the dashed line from the person to the start of the route (not wanted once the walk has begun).
+  final bool showToStart;
+
   /// Added to the style file name, so that two screens showing the same route do not write one file.
   final String fileTag;
 
@@ -52,6 +55,7 @@ class RouteMapView extends StatefulWidget {
     required this.onFullscreen,
     this.height = 280,
     this.follow = false,
+    this.showToStart = true,
     this.fileTag = '',
   });
 
@@ -100,6 +104,7 @@ class _RouteMapViewState extends State<RouteMapView> {
       old.me.removeListener(_onMe);
       widget.me.addListener(_onMe);
     }
+    if (old.showToStart != widget.showToStart) _onMe();
     if (old.reverse != widget.reverse) {
       _updateDirection();
       _onMe();
@@ -306,7 +311,7 @@ class _RouteMapViewState extends State<RouteMapView> {
         },
       }
     ]));
-    final far = haversine(p.latitude, p.longitude, _start.lat, _start.lon) > 50;
+    final far = widget.showToStart && haversine(p.latitude, p.longitude, _start.lat, _start.lon) > 50;
     await c.setGeoJsonSource('mestart', geoFc(far ? [geoLine([here, _ll(_start)])] : const []));
     if (widget.follow) {
       if (_follow) {

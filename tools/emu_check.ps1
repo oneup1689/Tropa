@@ -103,7 +103,9 @@ adb emu geo fix 105.8560 21.0300 | Out-Null   # v28: the start flow asks where t
 Start-Sleep 3
 TapLabel "emu-test" | Out-Null   # a route opens its own screen first
 Start-Sleep 3
-TapLabel "^Follow the route" | Out-Null
+adb shell input swipe 540 1900 540 600 300   # since v29 the route screen has a map: the button is below the fold
+Start-Sleep 1
+TapLabel "^Follow the route|^Walk this route" | Out-Null
 Start-Sleep 14   # position lookup (up to 8 s) before the recording starts
 adb emu geo fix 105.8560 21.0300 | Out-Null
 Start-Sleep 3

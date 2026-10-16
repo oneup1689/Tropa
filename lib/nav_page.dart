@@ -92,6 +92,7 @@ class _NavPageState extends State<NavPage> {
       headingAccuracy: 0,
       speed: speed,
       speedAccuracy: 0,
+      hasHeading: heading != 0,
     );
   }
 
@@ -218,6 +219,7 @@ class _NavPageState extends State<NavPage> {
             reverse: nav.reverse,
             me: _me,
             follow: true,
+            showToStart: toStart != null, // the dashed way to the start only while the person is still getting there
             height: (MediaQuery.of(context).size.height * 0.42).clamp(260.0, 520.0),
             preview: const SizedBox.shrink(),
             onFullscreen: () => Navigator.push(
