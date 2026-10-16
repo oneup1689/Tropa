@@ -239,6 +239,14 @@ class TrackDb {
     ];
   }
 
+  /// Only the points after [tsMs] (the live map adds what is new instead of reading the whole walk again).
+  Future<List<TrackPoint>> pointsAfter(int sessionId, int tsMs) async {
+    final db = await database;
+    final rows = await db.query('points',
+        columns: ['ts_ms', 'lat', 'lon'], where: 'session_id = ? AND ts_ms > ?', whereArgs: [sessionId, tsMs], orderBy: 'ts_ms');
+    return [for (final r in rows) TrackPoint(r['ts_ms'] as int, (r['lat'] as num).toDouble(), (r['lon'] as num).toDouble(), 0, 0, 0)];
+  }
+
   Future<DateTime?> lastPointTime(int sessionId) async {
     final db = await database;
     final v = Sqflite.firstIntValue(

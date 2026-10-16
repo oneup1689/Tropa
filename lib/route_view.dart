@@ -45,6 +45,30 @@ IconData modeIcon(TravelMode m) => switch (m) {
       TravelMode.mixed => Icons.commute, // walking and a vehicle in one walk (alt_route is the Routes icon)
     };
 
+/// The icon of a way of travelling. "Mixed" is a walker and a car side by side (walking and a vehicle in one walk);
+/// the others are a single Material icon.
+class ModeIcon extends StatelessWidget {
+  final TravelMode mode;
+  final double size;
+  final Color? color;
+
+  const ModeIcon(this.mode, {super.key, this.size = 24, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    if (mode != TravelMode.mixed) return Icon(modeIcon(mode), size: size, color: color);
+    final small = size * 0.74;
+    return SizedBox(
+      width: size * 1.3,
+      height: size,
+      child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.directions_walk, size: small, color: color),
+        Icon(Icons.directions_car, size: small, color: color),
+      ]),
+    );
+  }
+}
+
 class _Loaded {
   final List<TrackPoint> pts;
   final List<TrackSegment> segments;
@@ -232,7 +256,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
             SimpleDialogOption(
               onPressed: () => Navigator.pop(c, m),
               child: Row(children: [
-                Icon(modeIcon(m), color: modeColor(m)),
+                ModeIcon(m, color: modeColor(m)),
                 const SizedBox(width: 12),
                 Expanded(child: Text(t(m.label))),
                 if (m == _mode) const Icon(Icons.check, size: 18),
@@ -311,7 +335,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
         for (final s in segs)
           ListTile(
             dense: true,
-            leading: Icon(modeIcon(s.mode), color: modeColor(s.mode)),
+            leading: ModeIcon(s.mode, color: modeColor(s.mode)),
             title: Text('${t(s.mode.label)} · ${Units.dist(s.stats.distanceMeters)}'),
             subtitle: Text('${_clock(s.startMs)}–${_clock(s.endMs)} · ${_segmentLine(s)}'),
             trailing: const Icon(Icons.edit, size: 18),
@@ -351,7 +375,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
             SimpleDialogOption(
               onPressed: () => Navigator.pop(c, m),
               child: Row(children: [
-                Icon(modeIcon(m), color: modeColor(m)),
+                ModeIcon(m, color: modeColor(m)),
                 const SizedBox(width: 12),
                 Expanded(child: Text(t(m.label))),
                 if (m == s.mode) const Icon(Icons.check, size: 18),

@@ -11,6 +11,7 @@ import 'elevation.dart';
 import 'heal.dart';
 import 'modes.dart';
 import 'poster.dart';
+import 'splash.dart' show drawTropaWordmark;
 import 'segments.dart';
 import 'stats.dart';
 import 'weather.dart';
@@ -424,7 +425,7 @@ void _panel(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> 
   // Footer.
   const fy = 1090.0;
   drawTropaLogo(c, const Offset(x, fy), 70);
-  drawText(c, 'Tropa', const Offset(x + 84, fy + 6), headingStyle(36, weight: 700));
+  drawTropaWordmark(c, Rect.fromLTWH(x + 84, fy + 2, 140, 46));
   drawText(c, t('офлайн-трекер маршрутов'), const Offset(x + 86, fy + 48), bodyStyle(20, color: const Color(0xFF90A4AE)));
 }
 

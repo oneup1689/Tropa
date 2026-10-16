@@ -806,7 +806,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     width: 46,
                     height: 46,
                     decoration: BoxDecoration(shape: BoxShape.circle, color: current == m ? Colors.white : const Color(0x26FFFFFF)),
-                    child: Icon(modeIcon(m), size: 22, color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white)),
+                    child: ModeIcon(m, size: 22, color: current == m ? TropaColors.forestDeep : (recording ? Colors.white38 : Colors.white)),
                   ),
                 ),
               ),
@@ -1020,7 +1020,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
                     const SizedBox(height: 5),
                     Row(children: [
-                      Icon(modeIcon(mode), size: 16, color: cs.primary),
+                      ModeIcon(mode, size: 16, color: cs.primary),
                       const SizedBox(width: 5),
                       Flexible(
                         child: Text(

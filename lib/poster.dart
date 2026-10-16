@@ -18,6 +18,7 @@ import 'settings.dart';
 import 'stats.dart';
 import 'trim.dart';
 import 'poster_scale.dart';
+import 'splash.dart' show drawTropaWordmark;
 export 'poster_scale.dart' show LineColoring, LineScale, pickAuto, pickRelief, posterColorIndex, posterPalette, slopeAvailable;
 import 'weather.dart';
 import 'l10n.dart';
@@ -136,6 +137,7 @@ Future<Uint8List> composePoster({
   _drawScrims(c, o, useMap);
 
   drawPosterRoute(c, o, pts, i0, i1, mode, colorScale, speeds, proj, useMap && !o.darkMap);
+  if (!o.hideEnds) drawKmMarks(c, pts, i0, i1, proj);
 
   // --- text blocks
   final st = computeStats(pts, movingSpeedMs: profileOf(mode).movingSpeedMs);
@@ -394,6 +396,38 @@ void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, in
 
 /// Start: a green disc with a small "play" triangle; finish: a red disc with a white centre (a target). Both on a white
 /// ring with a soft shadow.
+/// Small numbered dots along the line, one per kilometre (mile), five or ten on long walks: where the person was
+/// after 1, 2, 3 ... km. Not drawn on walks under 2.5 km, and not near the start and the finish.
+void drawKmMarks(Canvas c, List<TrackPoint> pts, int i0, int i1, Projection proj, {double lineScale = 1.0}) {
+  final unit = Units.imperial ? 1609.344 : 1000.0;
+  final cum = List<double>.filled(i1 - i0 + 1, 0);
+  for (var i = i0 + 1; i <= i1; i++) {
+    final jump = pts[i].tsMs - pts[i - 1].tsMs > 30000; // a gap in the recording is not distance
+    cum[i - i0] = cum[i - i0 - 1] + (jump ? 0 : haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon));
+  }
+  final total = cum.last;
+  if (total < 2.5 * unit) return;
+  final every = total <= 12 * unit ? 1 : (total <= 60 * unit ? 5 : 10);
+  final first = proj(pts[i0].lat, pts[i0].lon), last = proj(pts[i1].lat, pts[i1].lon);
+  var next = every;
+  for (var i = i0 + 1; i <= i1; i++) {
+    while (next * unit <= cum[i - i0] && next * unit < total - 0.4 * unit) {
+      final a = cum[i - i0 - 1], b = cum[i - i0];
+      final f = b > a ? (next * unit - a) / (b - a) : 0.0;
+      final pa = proj(pts[i - 1].lat, pts[i - 1].lon), pb = proj(pts[i].lat, pts[i].lon);
+      final at = Offset(pa.dx + (pb.dx - pa.dx) * f, pa.dy + (pb.dy - pa.dy) * f);
+      if ((at - first).distance > 60 && (at - last).distance > 60) {
+        c.drawCircle(at, 15 * lineScale, Paint()..color = const Color(0xFF101010));
+        c.drawCircle(at, 13 * lineScale, Paint()..color = const Color(0xFFFFFFFF));
+        final label = '$next';
+        final style = bodyStyle(17 * lineScale, weight: 700, color: const Color(0xFF101010));
+        drawText(c, label, at.translate(-textWidth(label, style) / 2, -10 * lineScale), style);
+      }
+      next += every;
+    }
+  }
+}
+
 void _marker(Canvas c, Offset at, Color color, double outer, double inner, {bool start = false}) {
   c.drawCircle(at.translate(0, 3), outer + 1, Paint()..color = const Color(0x66000000));
   c.drawCircle(at, outer, Paint()..color = const Color(0xFFFFFFFF));
@@ -569,13 +603,15 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
       cells.add((Units.speed(st.maxSpeedMs, digits: 0), t('макс. скорость')));
     }
   }
+  // The main figure takes the colour of the line when the line has one colour (the poster then has an accent).
+  final accent = scale.coloring == LineColoring.single ? scale.singleColor : const Color(0xFFFFFFFF);
   const colW = (posterW - 128) / 2;
   final rows = (cells.length / 2).ceil();
   for (var i = 0; i < cells.length; i++) {
     final x = 64 + (i % 2) * colW, yy = y + (i ~/ 2) * 142;
     // The first figure (the distance) is the main one of the poster: bigger than the rest.
     final main = i == 0 && cells.length > 1;
-    drawText(c, cells[i].$1, Offset(x, yy), headingStyle(main ? 70 : 54, weight: 700), maxWidth: colW - 16, maxLines: 1);
+    drawText(c, cells[i].$1, Offset(x, yy), headingStyle(main ? 70 : 54, weight: 700, color: main ? accent : const Color(0xFFFFFFFF)), maxWidth: colW - 16, maxLines: 1);
     drawText(c, cells[i].$2, Offset(x, yy + (main ? 82 : 70)), bodyStyle(30, color: const Color(0xFFB0BEC5)));
   }
   y += rows * 142 + 8;
@@ -607,7 +643,7 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
   const fy = posterH - 150.0;
   c.drawLine(const Offset(64, fy - 14), const Offset(posterW - 64, fy - 14), Paint()..color = const Color(0x33FFFFFF)..strokeWidth = 2);
   drawTropaLogo(c, const Offset(64, fy + 8), 88);
-  drawText(c, 'Tropa', const Offset(170, fy + 22), headingStyle(46, weight: 700));
+  drawTropaWordmark(c, Rect.fromLTWH(170, fy + 12, 200, 62)); // the word as a trail (instead of plain letters)
   drawText(c, t('офлайн-трекер маршрутов'), const Offset(172, fy + 78), bodyStyle(24, color: const Color(0xFF90A4AE)));
   if (useMap) {
     const note = '© OpenStreetMap · Protomaps';

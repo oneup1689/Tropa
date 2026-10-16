@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -34,11 +36,20 @@ String _stamp(DateTime d) {
   return '${d.year}${two(d.month)}${two(d.day)}_${two(d.hour)}${two(d.minute)}';
 }
 
+Uint8List _zipBackup((Map<String, Object?>, List<(String, Uint8List)>) job) {
+  final archive = Archive();
+  for (final f in job.$2) {
+    archive.addFile(ArchiveFile.bytes(f.$1, f.$2));
+  }
+  archive.addFile(ArchiveFile.bytes('data.json', utf8.encode(jsonEncode(job.$1))));
+  return Uint8List.fromList(ZipEncoder().encode(archive));
+}
+
 Future<BackupResult> exportBackup() async {
   final db = TrackDb.instance;
   final sessions = await db.sessions(limit: 100000);
   final data = <String, Object?>{'format': 'tropa-backup', 'version': 2, 'exportedMs': DateTime.now().millisecondsSinceEpoch};
-  final archive = Archive();
+  final gpxFiles = <(String, Uint8List)>[]; // name and content, zipped together with the data in another isolate
   var totalPoints = 0;
 
   final sessionList = <Map<String, Object?>>[];
@@ -75,7 +86,7 @@ Future<BackupResult> exportBackup() async {
       final gpx = await writeGpx(s.id, heal: false);
       final bytes = await gpx.readAsBytes();
       final started = DateTime.fromMillisecondsSinceEpoch(s.startMs);
-      archive.addFile(ArchiveFile.bytes('gpx/${_stamp(started)}_${s.id}.gpx', bytes));
+      gpxFiles.add(('gpx/${_stamp(started)}_${s.id}.gpx', bytes));
     }
   }
   data['sessions'] = sessionList;
@@ -91,8 +102,8 @@ Future<BackupResult> exportBackup() async {
   }
   data['routes'] = routeList;
 
-  archive.addFile(ArchiveFile.bytes('data.json', utf8.encode(jsonEncode(data))));
-  final zip = ZipEncoder().encode(archive);
+  // Encoding the JSON and zipping are the heavy part: they run in a separate isolate, the screen does not freeze.
+  final zip = await compute(_zipBackup, (data, gpxFiles));
 
   final dir = await getTemporaryDirectory();
   final file = File(p.join(dir.path, 'tropa_backup_${_stamp(DateTime.now())}.zip'));

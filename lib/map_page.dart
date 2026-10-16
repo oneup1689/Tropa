@@ -732,6 +732,9 @@ class _MapPageState extends State<MapPage> {
 
   /// Live mode: redraw the recorded part and keep the camera on the current position.
   bool _ticking = false;
+  int? _liveSid; // the walk whose line is kept in _liveLine
+  final List<LatLng> _liveLine = [];
+  int _liveLastTs = 0;
 
   Future<void> _tickLive() async {
     final c = _controller;
@@ -750,9 +753,20 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _drawLive(MapLibreMapController c, Recorder rec, int? sid) async {
     if (sid != null) {
-      final pts = await TrackDb.instance.points(sid);
-      final line = [for (final p in pts) LatLng(p.lat, p.lon)];
-      if (line.length >= 2) await c.setGeoJsonSource('track', _fc([_lineFeature(line)]));
+      if (sid != _liveSid) {
+        _liveSid = sid;
+        _liveLine.clear();
+        _liveLastTs = 0;
+      }
+      // Only what is new since the last tick; the line itself is kept here.
+      final fresh = await TrackDb.instance.pointsAfter(sid, _liveLastTs);
+      if (fresh.isNotEmpty) {
+        _liveLastTs = fresh.last.tsMs;
+        for (final p in fresh) {
+          _liveLine.add(LatLng(p.lat, p.lon));
+        }
+        if (_liveLine.length >= 2) await c.setGeoJsonSource('track', _fc([_lineFeature(_liveLine)]));
+      }
     }
     if (rec.lastLat != 0 && !widget.tab) {
       final here = LatLng(rec.lastLat, rec.lastLon);
