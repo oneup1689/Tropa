@@ -7,9 +7,23 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Tropa записывает ваш маршрут по GPS.</string>
+	<string>Tropa записывает ваш маршрут по GPS. / Tropa records your route with GPS.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Tropa продолжает запись маршрута, когда экран выключен.</string>
+	<string>Tropa продолжает запись маршрута, когда экран выключен. / Tropa keeps recording your route while the screen is off.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Tropa продолжает запись маршрута, когда экран выключен. / Tropa keeps recording your route while the screen is off.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна для фото и видео заметок на маршруте. / The camera is used for photo and video notes on your route.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Микрофон нужен для звука в видео заметках. / The microphone is used for sound in video notes.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Доступ к галерее нужен, чтобы прикрепить фото или видео к заметке. / Photo library access lets you attach a photo or video to a note.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Tropa сохраняет снятые фото, видео и постеры в альбом Tropa. / Tropa saves photos, videos and posters to the Tropa album.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

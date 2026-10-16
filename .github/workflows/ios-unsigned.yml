@@ -1,0 +1,39 @@
+name: iOS unsigned IPA
+
+# Builds an unsigned Tropa.ipa on a macOS runner. The IPA is re-signed on the phone by SideStore
+# (free Apple ID). Run it by hand: Actions -> "iOS unsigned IPA" -> Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build (no code signing)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          cd build/ios/iphoneos
+          rm -rf Payload Tropa.ipa
+          mkdir Payload
+          cp -R Runner.app Payload/Runner.app
+          zip -qry Tropa.ipa Payload
+          ls -lh Tropa.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tropa-ios-unsigned
+          path: build/ios/iphoneos/Tropa.ipa
+          retention-days: 14

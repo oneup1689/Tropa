@@ -37,6 +37,18 @@ void main() {
       for (final (d, px) in const [('mdpi', 24), ('hdpi', 36), ('xhdpi', 48), ('xxhdpi', 72), ('xxxhdpi', 96)]) {
         await _png('$res/drawable-$d/ic_stat_tropa.png', px, (c, s) => drawTropaLogo(c, Offset.zero, s, badge: false, mono: const Color(0xFFFFFFFF), fill: 0.92));
       }
+      // iOS: a full-bleed square (the system rounds the corners itself): poster gradient + the t mark.
+      const ios = 'ios/Runner/Assets.xcassets/AppIcon.appiconset';
+      final name = RegExp(r'^Icon-App-([\d.]+)x[\d.]+@(\d)x\.png$');
+      for (final f in Directory(ios).listSync().whereType<File>()) {
+        final m = name.firstMatch(f.uri.pathSegments.last);
+        if (m == null) continue;
+        final px = (double.parse(m.group(1)!) * int.parse(m.group(2)!)).round();
+        await _png(f.path, px, (c, s) {
+          c.drawRect(Rect.fromLTWH(0, 0, s, s), Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(s, s), const [brandGreen, brandNight]));
+          drawTropaLogo(c, Offset.zero, s, badge: false, fill: 0.62);
+        });
+      }
     });
   }, skip: Platform.environment['RENDER_ICONS'] == null);
 }

@@ -116,7 +116,7 @@
 - Анализ и тесты перед каждой сборкой: `flutter analyze` и `flutter test` (103 теста проходят, 2 пропускаются без личных GPX).
 - gh установлен (`winget`), вход выполнен как oneup1689; в папке настроены user.name/email.
 - Скрипты проверки и подготовки данных — `tools/` (см. `tools/README.md`).
-- iOS: сборка только через GitHub Actions (macOS runner), подпись бесплатным Apple ID (SideStore/Sideloadly, 7 дней) либо TestFlight (99 $/год). Проверить поддержку iOS 27 в SideStore до начала iOS-этапа. **iOS ещё не собирался.**
+- iOS: сборка только через GitHub Actions (macOS runner), подпись бесплатным Apple ID (SideStore/Sideloadly, 7 дней) либо TestFlight (99 $/год). Проверить поддержку iOS 27 в SideStore до начала iOS-этапа. **iOS ещё не собирался.** Этап 1 iOS (2026-10-16, решения владельца: бесплатный Apple ID + SideStore, сначала только «собирается и запускается», запись iOS — отдельным этапом): значки iOS из логотипа (`render_icons_test.dart`), ключи камеры/галереи/микрофона и двуязычные тексты в `Info.plist`, `UIFileSharingEnabled` (карты `.pmtiles` кладутся через «Файлы»), workflow `.github/workflows/ios-unsigned.yml` (ручной запуск, артефакт `Tropa-ios-unsigned` = неподписанный `Tropa.ipa`, подпись в SideStore). Workflow ещё НЕ запускался (нужен push); iOS-сборка и запуск не проверены.
 
 ## 3. Архитектура
 **Android, нативная часть (Kotlin)** — единственный пишет точки в SQLite (`tropa.db`):
