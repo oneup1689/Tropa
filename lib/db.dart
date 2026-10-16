@@ -317,6 +317,12 @@ class TrackDb {
     await db.update('notes', {'media_type': type, 'media_name': name}, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Moves a note to another place of the walk (its time follows the place).
+  Future<void> updateNotePlace(int id, int tsMs, double lat, double lon) async {
+    final db = await database;
+    await db.update('notes', {'ts_ms': tsMs, 'lat': lat, 'lon': lon}, where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> deleteNote(int id) async {
     final db = await database;
     await db.delete('notes', where: 'id = ?', whereArgs: [id]);

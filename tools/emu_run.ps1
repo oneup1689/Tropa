@@ -33,6 +33,7 @@ if ($devices -notmatch "emulator-5554\s+device") {
 }
 do { Start-Sleep 5; $b = adb shell getprop sys.boot_completed } until ($b -match "1")
 adb install -r $Apk 2>&1 | Select-Object -Last 1
+adb shell dumpsys deviceidle whitelist +$pkg | Out-Null   # a clean image would ask "run in background?" on the first start
 foreach ($p in "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "POST_NOTIFICATIONS", "ACTIVITY_RECOGNITION") { adb shell pm grant $pkg android.permission.$p 2>$null | Out-Null }
 
 # --- scenarios (core makes its own data; the others share one fixture)

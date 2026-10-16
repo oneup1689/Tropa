@@ -59,7 +59,7 @@ class ModeIcon extends StatelessWidget {
     if (mode != TravelMode.mixed) return Icon(modeIcon(mode), size: size, color: color);
     final small = size * 0.74;
     return SizedBox(
-      width: size * 1.3,
+      width: size * 1.55, // two icons of 0.74 of the size side by side
       height: size,
       child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.directions_walk, size: small, color: color),
@@ -99,6 +99,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
   late TravelMode _mode = widget.mode;
   late String _title = widget.title;
   late Future<_Loaded> _future = _load();
+  _Loaded? _data; // the walk as last shown (the place of a note is chosen on it)
 
   Future<_Loaded> _load() async {
     final db = TrackDb.instance;
@@ -118,7 +119,9 @@ class _RouteViewPageState extends State<RouteViewPage> {
     return false;
   }
 
-  void _reload() => setState(() => _future = _load());
+  void _reload() => setState(() {
+        _future = _load();
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -129,6 +132,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
         builder: (context, snap) {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final data = snap.data!;
+          _data = data;
           final pts = data.pts;
           if (pts.length < 2) return Center(child: Text(t('Недостаточно точек')));
           final healCfg = AppSettings.instance.healFor(_mode);
@@ -392,14 +396,22 @@ class _RouteViewPageState extends State<RouteViewPage> {
   // ---------------------------------------------------------------- notes
 
   Widget _notesCard(BuildContext context, _Loaded data) {
-    if (data.notes.isEmpty) return const SizedBox.shrink();
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(t('Заметки'), style: Theme.of(context).textTheme.titleMedium),
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+          child: Row(children: [
+            Expanded(child: Text(t('Заметки'), style: Theme.of(context).textTheme.titleMedium)),
+            // A note can be made after the walk too: the place is chosen on the route.
+            TextButton.icon(onPressed: () => _addNote(data), icon: const Icon(Icons.add), label: Text(t('Добавить заметку'))),
+          ]),
         ),
+        if (data.notes.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: Text(t('Заметок пока нет'), style: Theme.of(context).textTheme.bodySmall),
+          ),
         for (final n in data.notes)
           ListTile(
             dense: true,
@@ -412,6 +424,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
               onSelected: (v) => _noteAction(n, v),
               itemBuilder: (_) => [
                 PopupMenuItem(value: 'text', child: Text(t('Изменить текст'))),
+                PopupMenuItem(value: 'place', child: Text(t('Изменить место'))),
                 PopupMenuItem(value: 'media', child: Text(t('Заменить фото или видео'))),
                 if (n.mediaType == 'photo') PopupMenuItem(value: 'thumb', child: Text(t('Показать фото на постере…'))),
                 if (n.mediaName.isNotEmpty) PopupMenuItem(value: 'open', child: Text(t('Открыть галерею'))),
@@ -421,6 +434,44 @@ class _RouteViewPageState extends State<RouteViewPage> {
           ),
       ]),
     );
+  }
+
+  /// A new text note on the finished walk: the text and the place on the route.
+  Future<void> _addNote(_Loaded data) async {
+    if (data.pts.length < 2) return;
+    final r = await showDialog<({String text, int index, String mediaType, String mediaName})>(
+      context: context,
+      builder: (_) => _NoteDialog(pts: data.pts, title: t('Новая заметка'), withText: true, initialIndex: data.pts.length - 1),
+    );
+    if (r == null || !mounted) return;
+    final pt = data.pts[r.index];
+    await TrackDb.instance.addNote(sessionId: widget.sessionId, tsMs: pt.tsMs, lat: pt.lat, lon: pt.lon,
+        text: r.text, mediaType: r.mediaType, mediaName: r.mediaName);
+    DebugLog.instance.log('NOTE', 'note added after the walk, session=${widget.sessionId} point=${r.index}');
+    _reload();
+  }
+
+  /// Another place of the walk for an existing note.
+  Future<void> _moveNote(TrackNote n) async {
+    final data = _data;
+    if (data == null) return;
+    var idx = 0;
+    var best = double.infinity;
+    for (var i = 0; i < data.pts.length; i++) {
+      final d = haversine(data.pts[i].lat, data.pts[i].lon, n.lat, n.lon);
+      if (d < best) {
+        best = d;
+        idx = i;
+      }
+    }
+    final r = await showDialog<({String text, int index, String mediaType, String mediaName})>(
+      context: context,
+      builder: (_) => _NoteDialog(pts: data.pts, title: t('Место заметки'), withText: false, initialIndex: idx),
+    );
+    if (r == null || !mounted) return;
+    final pt = data.pts[r.index];
+    await TrackDb.instance.updateNotePlace(n.id, pt.tsMs, pt.lat, pt.lon);
+    _reload();
   }
 
   void _snack(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -447,6 +498,8 @@ class _RouteViewPageState extends State<RouteViewPage> {
         }
         await TrackDb.instance.updateNoteText(n.id, text);
         _reload();
+      case 'place':
+        await _moveNote(n);
       case 'media':
         await _replaceMedia(n);
       case 'thumb':
@@ -693,4 +746,210 @@ class _RenameDialogState extends State<_RenameDialog> {
           TextButton(onPressed: () => Navigator.pop(context, _ctl.text.trim()), child: Text(t('Сохранить'))),
         ],
       );
+}
+
+/// The dialog of a note on a finished walk: the text (when [withText]) and the place, chosen by touching the route.
+class _NoteDialog extends StatefulWidget {
+  final List<TrackPoint> pts;
+  final String title;
+  final bool withText;
+  final int initialIndex;
+
+  const _NoteDialog({required this.pts, required this.title, required this.withText, required this.initialIndex});
+
+  @override
+  State<_NoteDialog> createState() => _NoteDialogState();
+}
+
+class _NoteDialogState extends State<_NoteDialog> {
+  final TextEditingController _text = TextEditingController();
+  late int _index = widget.initialIndex;
+  String _mediaType = '', _mediaName = ''; // a photo or video chosen from the gallery
+  static const double _height = 240;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  /// Metres of the walk from its start to the chosen point (gaps of the recording are not distance).
+  double _fromStart() {
+    var d = 0.0;
+    for (var i = 1; i <= _index; i++) {
+      if (widget.pts[i].tsMs - widget.pts[i - 1].tsMs > 30000) continue;
+      d += haversine(widget.pts[i - 1].lat, widget.pts[i - 1].lon, widget.pts[i].lat, widget.pts[i].lon);
+    }
+    return d;
+  }
+
+  /// A photo or a video that is already in the gallery (it was taken during the walk, or later): only its name is kept,
+  /// as for the ones taken in the app; a photo also leaves the small copy for the poster.
+  Future<void> _attach(bool video) async {
+    try {
+      final picker = ImagePicker();
+      final XFile? f = video ? await picker.pickVideo(source: ImageSource.gallery) : await picker.pickImage(source: ImageSource.gallery);
+      if (f == null) return;
+      final name = f.name.isEmpty ? f.path.split('/').last : f.name;
+      if (!video) await saveNoteThumb(f.path, name);
+      if (mounted) {
+        setState(() {
+          _mediaType = video ? 'video' : 'photo';
+          _mediaName = name;
+        });
+      }
+    } catch (e) {
+      DebugLog.instance.log('NOTE', 'gallery pick failed: $e');
+    }
+  }
+
+  void _pick(Offset local, Size size) {
+    final fit = _PlaceFit(widget.pts, size);
+    setState(() => _index = fit.nearest(local));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final pt = widget.pts[_index];
+    final d = DateTime.fromMillisecondsSinceEpoch(pt.tsMs);
+    final clock = '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+    final canSave = !widget.withText || _text.text.trim().isNotEmpty || _mediaName.isNotEmpty;
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (widget.withText) ...[
+              TextField(
+                controller: _text,
+                maxLines: 3,
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(hintText: t('Текст заметки'), border: const OutlineInputBorder()),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, children: [
+                ActionChip(avatar: const Icon(Icons.photo_library_outlined), label: Text(t('Фото из галереи')), onPressed: () => _attach(false)),
+                ActionChip(avatar: const Icon(Icons.video_library_outlined), label: Text(t('Видео из галереи')), onPressed: () => _attach(true)),
+              ]),
+              if (_mediaName.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(_mediaType == 'photo' ? t('Фото прикреплено') : t('Видео прикреплено'), style: Theme.of(context).textTheme.bodySmall),
+                ),
+              const SizedBox(height: 12),
+            ],
+            Text(t('Коснитесь маршрута, чтобы выбрать место'), style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 6),
+            LayoutBuilder(builder: (context, box) {
+              final size = Size(box.maxWidth, _height);
+              return GestureDetector(
+                onTapDown: (e) => _pick(e.localPosition, size),
+                onPanUpdate: (e) => _pick(e.localPosition, size),
+                child: Container(
+                  height: _height,
+                  decoration: BoxDecoration(color: cs.surfaceContainerHigh, borderRadius: BorderRadius.circular(12)),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: CustomPaint(size: size, painter: _PlacePainter(widget.pts, _index, cs)),
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 8),
+            Text(t('Место: {p0}, {p1} от старта', {'p0': clock, 'p1': Units.dist(_fromStart())}),
+                style: Theme.of(context).textTheme.bodyMedium),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(t('Отмена'))),
+        TextButton(
+          onPressed: canSave ? () => Navigator.pop(context, (text: _text.text.trim(), index: _index, mediaType: _mediaType, mediaName: _mediaName)) : null,
+          child: Text(t('Сохранить')),
+        ),
+      ],
+    );
+  }
+}
+
+/// How a track is fitted into a rectangle (the same for drawing and for finding the touched point).
+class _PlaceFit {
+  final List<TrackPoint> pts;
+  final Size size;
+  late final double _minLat, _minLon, _kx, _scale, _ox, _oy;
+
+  _PlaceFit(this.pts, this.size) {
+    var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    for (final p in pts) {
+      minLat = math.min(minLat, p.lat);
+      maxLat = math.max(maxLat, p.lat);
+      minLon = math.min(minLon, p.lon);
+      maxLon = math.max(maxLon, p.lon);
+    }
+    _kx = math.cos((minLat + maxLat) / 2 * math.pi / 180);
+    final w = math.max((maxLon - minLon) * _kx, 1e-6), h = math.max(maxLat - minLat, 1e-6);
+    _scale = math.min(size.width / w, size.height / h) * 0.88;
+    _ox = (size.width - w * _scale) / 2;
+    _oy = (size.height - h * _scale) / 2;
+    _minLat = minLat;
+    _minLon = minLon;
+  }
+
+  Offset at(TrackPoint p) => Offset(_ox + (p.lon - _minLon) * _kx * _scale, size.height - _oy - (p.lat - _minLat) * _scale);
+
+  int nearest(Offset local) {
+    var best = 0;
+    var bestD = double.infinity;
+    for (var i = 0; i < pts.length; i++) {
+      final d = (at(pts[i]) - local).distanceSquared;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+}
+
+class _PlacePainter extends CustomPainter {
+  final List<TrackPoint> pts;
+  final int index;
+  final ColorScheme scheme;
+
+  _PlacePainter(this.pts, this.index, this.scheme);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fit = _PlaceFit(pts, size);
+    final line = Paint()
+      ..color = scheme.primary
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    final path = Path();
+    for (var i = 0; i < pts.length; i++) {
+      final o = fit.at(pts[i]);
+      final jump = i > 0 && pts[i].tsMs - pts[i - 1].tsMs > 30000;
+      if (i == 0 || jump) {
+        path.moveTo(o.dx, o.dy);
+      } else {
+        path.lineTo(o.dx, o.dy);
+      }
+    }
+    canvas.drawPath(path, line);
+    canvas.drawCircle(fit.at(pts.first), 6, Paint()..color = Colors.green);
+    canvas.drawCircle(fit.at(pts.last), 6, Paint()..color = Colors.red);
+    final at = fit.at(pts[index]);
+    canvas.drawCircle(at, 13, Paint()..color = Colors.white);
+    canvas.drawCircle(at, 10, Paint()..color = const Color(0xFFAB47BC));
+    canvas.drawCircle(at, 3.5, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(_PlacePainter old) => old.index != index || old.pts != pts;
 }

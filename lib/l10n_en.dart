@@ -669,4 +669,15 @@ const Map<String, String> enStrings = {
   'Цвет': 'Colour',
   'Авто: скорость, если были транспорт или велосипед; рельеф на холмах; иначе свой цвет у каждой прогулки':
       'Auto: speed when there was a vehicle or a bike; relief on hills; otherwise each walk has its own colour',
+  'Добавить заметку': 'Add a note',
+  'Новая заметка': 'New note',
+  'Заметок пока нет': 'No notes yet',
+  'Изменить место': 'Change the place',
+  'Место заметки': 'Place of the note',
+  'Коснитесь маршрута, чтобы выбрать место': 'Touch the route to choose the place',
+  'Место: {p0}, {p1} от старта': 'Place: {p0}, {p1} from the start',
+  'Фото из галереи': 'Photo from the gallery',
+  'Видео из галереи': 'Video from the gallery',
+  'Фото прикреплено': 'Photo attached',
+  'Видео прикреплено': 'Video attached',
 };
