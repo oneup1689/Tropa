@@ -41,6 +41,22 @@ void main() {
     expect(slopeAvailable([for (final p in hill) p.altitude], 0, hill.length - 1), true);
   });
 
+  test('relief: flat, one climb and many ups and downs are told apart', () {
+    List<double> up(int n, double from, double to) => [for (var i = 0; i < n; i++) from + (to - from) * i / (n - 1)];
+    final flat = up(100, 100, 105);
+    expect(pickRelief(flat, 0, flat.length - 1), LineColoring.single);
+    final climb = [...up(100, 100, 260), ...up(100, 260, 100)]; // up a hill and back: total 2x the range
+    expect(pickRelief(climb, 0, climb.length - 1), LineColoring.height);
+    final rolling = <double>[];
+    for (var k = 0; k < 8; k++) {
+      rolling.addAll(up(30, 100, 160));
+      rolling.addAll(up(30, 160, 100));
+    }
+    expect(pickRelief(rolling, 0, rolling.length - 1), LineColoring.slope); // 16 x 60 m over a range of 60 m
+    final small = [...up(50, 100, 125), ...up(50, 125, 100)];
+    expect(pickRelief(small, 0, small.length - 1), LineColoring.height); // 25 m: too little for slopes
+  });
+
   test('a walk with a taxi ride gets separate speed scales and a dashed vehicle stretch', () {
     final pts = _track([(1.4, 300, 0), (12.0, 240, 0), (1.4, 120, 0)]);
     final speeds = [for (final p in pts) p.speed];

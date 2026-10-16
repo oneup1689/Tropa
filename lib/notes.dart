@@ -54,6 +54,11 @@ Future<bool> showNoteSheet(BuildContext context) async {
   final rec = Recorder.instance;
   final sessionId = rec.sessionId;
   if (sessionId == null) return false;
+  if (rec.lastLat == 0 && rec.lastLon == 0) {
+    // No position yet: a note would land at 0,0 in the ocean and break the frame of the poster.
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Пока нет положения GPS. Подождите несколько секунд и повторите.'))));
+    return false;
+  }
   final ctl = TextEditingController();
   NoteMedia? media;
 

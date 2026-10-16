@@ -37,7 +37,7 @@ String _stamp(DateTime d) {
 Future<BackupResult> exportBackup() async {
   final db = TrackDb.instance;
   final sessions = await db.sessions(limit: 100000);
-  final data = <String, Object?>{'format': 'tropa-backup', 'version': 1, 'exportedMs': DateTime.now().millisecondsSinceEpoch};
+  final data = <String, Object?>{'format': 'tropa-backup', 'version': 2, 'exportedMs': DateTime.now().millisecondsSinceEpoch};
   final archive = Archive();
   var totalPoints = 0;
 
@@ -47,7 +47,13 @@ Future<BackupResult> exportBackup() async {
     final notes = await db.notes(s.id);
     final overrides = await db.segmentOverrides(s.id);
     totalPoints += pts.length;
+    // Title, place, weather, heights and water temperature of the poster (format version 2).
+    final meta = await db.sessionMeta(s.id);
     sessionList.add({
+      'meta': {
+        for (final k in const ['title', 'region', 'weather', 'water_temp', 'elevation'])
+          if (meta[k] != null) k: meta[k],
+      },
       'startMs': s.startMs,
       'endMs': s.endMs,
       'status': s.status == 'active' ? 'interrupted' : s.status,
@@ -78,6 +84,7 @@ Future<BackupResult> exportBackup() async {
   for (final r in await db.routes()) {
     final pts = await db.routePoints(r.id);
     routeList.add({
+      'elevation': await db.routeElevation(r.id),
       'name': r.name,
       'points': [for (final t in pts) [t.lat, t.lon]],
     });
@@ -154,6 +161,12 @@ Future<RestoreResult> importBackup(File file) async {
         batch.insert('segment_overrides',
             {'session_id': id, 'start_ms': om['start'], 'end_ms': om['end'], 'mode': om['mode']});
       }
+      final meta = m['meta'];
+      if (meta is Map<String, dynamic>) {
+        const allowed = ['title', 'region', 'weather', 'water_temp', 'elevation'];
+        final values = {for (final e in meta.entries) if (allowed.contains(e.key)) e.key: e.value};
+        if (values.isNotEmpty) batch.insert('session_meta', {'session_id': id, ...values});
+      }
       await batch.commit(noResult: true);
     });
     existing.add(startMs);
@@ -167,7 +180,9 @@ Future<RestoreResult> importBackup(File file) async {
       for (final t in (m['points'] as List<dynamic>)) (lat: (t[0] as num).toDouble(), lon: (t[1] as num).toDouble()),
     ];
     if (knownRoutes.contains('${m['name']}|${pts.length}')) continue;
-    await TrackDb.instance.addRoute(m['name'] as String, pts);
+    final newId = await TrackDb.instance.addRoute(m['name'] as String, pts);
+    final elevation = m['elevation'];
+    if (elevation is String) await TrackDb.instance.setRouteElevation(newId, elevation);
     routeCount++;
   }
   return RestoreResult(added, skipped, noteCount, routeCount);

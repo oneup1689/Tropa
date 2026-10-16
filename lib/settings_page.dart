@@ -16,6 +16,7 @@ IconData _sectionIcon(String section) => switch (section) {
       'Навигация' => Icons.navigation_outlined,
       'Звуки и вибрация' => Icons.volume_up_outlined,
       'Данные' => Icons.folder_outlined,
+      'Приватность' => Icons.lock_outline,
       _ => Icons.tune,
     };
 
@@ -35,11 +36,7 @@ class SettingsPage extends StatelessWidget {
         for (final d in visible) {
           if (!sections.contains(d.section)) sections.add(d.section);
         }
-        // The Auto-record row is always there, even when the group has no setting of its own (amateur mode).
-        if (!sections.contains('Автоматическая запись')) {
-          final at = sections.indexOf('Запись');
-          sections.insert(at < 0 ? sections.length : at, 'Автоматическая запись');
-        }
+        // Auto-record itself (24/7 and the planner) lives on the start card; only its Pro settings are here.
         return Scaffold(
           appBar: AppBar(title: Text(t('Настройки'))),
           body: ListView(
@@ -84,7 +81,6 @@ class SettingsPage extends StatelessWidget {
                     for (final d in visible.where((d) => d.section == section)) _tile(context, s, d),
                   ]),
                 ),
-                if (section == 'Автоматическая запись') const AutoRecordTile(),
               ],
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 22, 4, 6),

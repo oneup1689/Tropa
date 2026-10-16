@@ -40,6 +40,8 @@ class RouteNavigator extends ChangeNotifier {
   /// The person is farther from the route than allowed.
   bool offRoute = false;
   int _offCount = 0, _onCount = 0;
+  int _countedPoints = -1; // number of stored points at the last counted position
+  DateTime? _offSince; // when the current stretch away from the route began
   bool _titled = false;
   bool _listening = false;
 
@@ -105,6 +107,8 @@ class RouteNavigator extends ChangeNotifier {
     state = null;
     offRoute = false;
     _offCount = _onCount = 0;
+    _countedPoints = -1;
+    _offSince = null;
     _titled = false;
     active = true;
     if (!_listening) {
@@ -254,15 +258,22 @@ class RouteNavigator extends ChangeNotifier {
     }
 
     // "Off route" / "back on route" with hysteresis, spoken once per change.
+    // The recorder notifies about once a second whatever happens, but a position is new only when a point was stored:
+    // count positions, not notifications (the same rule as the native guard: 3 positions over at least 15 s).
     final limit = math.max(AppSettings.instance.offRouteMeters, 2 * _rec.lastAccuracy);
-    if (s.offM > limit) {
-      _offCount++;
-      _onCount = 0;
-    } else if (s.offM < 25) {
-      _onCount++;
-      _offCount = 0;
+    if (_rec.pointCount != _countedPoints) {
+      _countedPoints = _rec.pointCount;
+      if (s.offM > limit) {
+        if (_offCount == 0) _offSince = DateTime.now();
+        _offCount++;
+        _onCount = 0;
+      } else if (s.offM < 25) {
+        _onCount++;
+        _offCount = 0;
+      }
     }
-    if (!offRoute && _offCount >= 3) {
+    final offLongEnough = _offSince != null && DateTime.now().difference(_offSince!).inSeconds >= 15;
+    if (!offRoute && _offCount >= 3 && offLongEnough) {
       offRoute = true;
       _say(t('Вы сошли с маршрута'), const [0, 400, 200, 400]);
     } else if (offRoute && _onCount >= 3) {

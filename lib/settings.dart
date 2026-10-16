@@ -243,6 +243,15 @@ const List<SettingDef> settingDefs = [
     options: [('both', 'Звук и вибрация'), ('sound', 'Только звук'), ('vibe', 'Только вибрация'), ('silent', 'Без звука')],
   ),
   SettingDef(
+    key: 'cloud_backup',
+    title: 'Копия в аккаунте Google',
+    subtitle: 'Android сам сохраняет прогулки в ваш Google Drive и переносит их на новый телефон. '
+        'Прогулки содержат места, где вы бываете. По умолчанию выключено.',
+    section: 'Приватность',
+    kind: SettingKind.toggle,
+    defaultValue: false,
+  ),
+  SettingDef(
     key: 'offroute',
     title: 'Чувствительность «вы сошли с маршрута»',
     subtitle: 'Строгая — предупреждение при отклонении от 25 м, свободная — от 70 м',

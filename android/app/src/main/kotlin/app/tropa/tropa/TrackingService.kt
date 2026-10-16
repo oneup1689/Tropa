@@ -278,7 +278,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         when {
             intent?.action == ACTION_WATCH -> {
                 prefs.edit().putBoolean(KEY_AUTO, true).apply()
-                if (state != State.RECORD) enterWatch()
+                // A running walk and a wait at a route start both come first; 24/7 resumes when they end.
+                if (state != State.RECORD && state != State.WAIT) enterWatch()
             }
             intent?.action == ACTION_WAIT_START -> {
                 if (state == State.RECORD) return START_STICKY
@@ -368,6 +369,8 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private var waitLat = 0.0
     private var waitLon = 0.0
     private var waitRadius = 50f
+    private var waitStartWall = 0L
+    private val maxWaitMs = 8 * 3_600_000L // GPS and the wake lock are held while waiting: do not do it forever
 
     /** Recording is not started yet: GPS is polled slowly and the walk begins when the person reaches the start. */
     private fun enterWait(prefs: android.content.SharedPreferences) {
@@ -377,6 +380,7 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
         stopLocation()
         unregisterMotionSensors()
         state = State.WAIT
+        waitStartWall = System.currentTimeMillis()
         waitingStart = true
         waitDistM = -1.0
         running = false
@@ -422,6 +426,13 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
     private fun enterWatch() {
         stopLocation()
         releaseWakeLock()
+        // Waiting for a route start (if it was on) ends here: the flags must not outlive the state.
+        if (waitingStart) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("wait_active", false).apply()
+            waitingStart = false
+            waitDistM = -1.0
+            Notifier.cancel(this, Notifier.WAIT_ID)
+        }
         state = State.WATCH
         watching = true
         running = false
@@ -1175,6 +1186,12 @@ class TrackingService : Service(), LocationListener, SensorEventListener {
             }
             State.IDLE -> return
             State.WAIT -> {
+                if (now - waitStartWall > maxWaitMs) {
+                    log(this, "WAIT", "gave up after ${maxWaitMs / 3_600_000} h without reaching the start")
+                    Notifier.postAlert(this, Notifier.WAIT_ID, Tr.t(this, "Ожидание у старта отменено"), Tr.t(this, "Вы так и не дошли до старта маршрута за 8 часов."), "📍", "hint")
+                    cancelWait()
+                    return
+                }
                 beatCount++
                 val gpsOn = (getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
                 if (!gpsOn) {

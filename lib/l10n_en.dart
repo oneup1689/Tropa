@@ -652,4 +652,17 @@ const Map<String, String> enStrings = {
   'Поделиться картой': 'Share the map',
   'Весь маршрут': 'Whole route',
   'Не удалось поделиться картой: {p0}': 'Could not share the map: {p0}',
+  // v31
+  'Эта прогулка записывается сейчас. Сначала остановите запись.': 'This walk is being recorded now. Stop the recording first.',
+  'Показать ещё': 'Show more',
+  'Пока нет положения GPS. Подождите несколько секунд и повторите.': 'No GPS position yet. Wait a few seconds and try again.',
+  'Копия в аккаунте Google': 'Backup to your Google account',
+  'Android сам сохраняет прогулки в ваш Google Drive и переносит их на новый телефон. Прогулки содержат места, где вы бываете. По умолчанию выключено.':
+      'Android saves the walks to your Google Drive and moves them to a new phone. The walks contain places where you go. Off by default.',
+  'Приватность': 'Privacy',
+  'Рельеф': 'Relief',
+  'Рельеф: много подъёмов и спусков, цвет показывает крутизну (тёплый — подъём, холодный — спуск)':
+      'Relief: many climbs and descents, the colour shows steepness (warm — climb, cool — descent)',
+  'Рельеф: цвет показывает высоту над уровнем моря': 'Relief: the colour shows the height above sea level',
+  'Маршрут ровный: «Рельеф» недоступен': 'The route is flat: "Relief" is not available',
 };

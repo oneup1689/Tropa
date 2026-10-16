@@ -17,6 +17,7 @@ import 'modes.dart';
 import 'note_thumbs.dart';
 import 'notes.dart';
 import 'poster_page.dart';
+import 'recorder.dart';
 import 'routes.dart';
 import 'segments.dart';
 import 'settings.dart';
@@ -190,7 +191,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
           PopupMenuItem(value: 'route', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Сохранить как маршрут')), dense: true)),
           PopupMenuItem(value: 'rename', child: ListTile(leading: const Icon(Icons.edit_outlined), title: Text(t('Переименовать')), dense: true)),
           PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Изменить режим')), dense: true)),
-          PopupMenuItem(value: 'delete', child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(t('Удалить')), dense: true)),
+          PopupMenuItem(value: 'delete', enabled: !_isRecording, child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(t('Удалить')), dense: true)),
         ],
       );
 
@@ -247,7 +248,14 @@ class _RouteViewPageState extends State<RouteViewPage> {
     _reload();
   }
 
+  /// The walk that is being recorded right now: the service is still writing its points.
+  bool get _isRecording => Recorder.instance.recording && Recorder.instance.sessionId == widget.sessionId;
+
   Future<void> _delete() async {
+    if (_isRecording) {
+      _snack(t('Эта прогулка записывается сейчас. Сначала остановите запись.'));
+      return;
+    }
     final nav = Navigator.of(context);
     final ok = await showDialog<bool>(
       context: context,
@@ -261,7 +269,12 @@ class _RouteViewPageState extends State<RouteViewPage> {
       ),
     );
     if (ok != true) return;
+    // The small photo copies of its notes go with it.
+    final notes = await TrackDb.instance.notes(widget.sessionId);
     await TrackDb.instance.deleteSession(widget.sessionId);
+    for (final n in notes) {
+      await deleteNoteThumb(n.mediaName);
+    }
     nav.pop();
   }
 

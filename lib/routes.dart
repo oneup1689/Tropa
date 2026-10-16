@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'debug_log.dart';
 import 'package:xml/xml.dart';
 
@@ -70,7 +72,7 @@ List<({double lat, double lon})> thinToRoute(List<({double lat, double lon})> pt
   for (var i = 1; i < pts.length - 1; i++) {
     final a = out.last, b = pts[i];
     final dy = (b.lat - a.lat) * 111320;
-    final dx = (b.lon - a.lon) * 111320 * 0.94; // good enough between points metres apart, at 10-30 degrees of latitude
+    final dx = (b.lon - a.lon) * 111320 * math.cos(a.lat * math.pi / 180); // a degree of longitude shrinks with latitude
     if (dx * dx + dy * dy >= stepM * stepM) out.add(b);
   }
   out.add(pts.last);

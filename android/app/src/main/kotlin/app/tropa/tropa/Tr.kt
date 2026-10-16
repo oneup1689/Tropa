@@ -43,6 +43,8 @@ object Tr {
         "Идите по маршруту." to "Follow the route.",
         "GPS выключен — запись не начнётся" to "GPS is off — recording will not start",
         "Включите геолокацию: приложение ждёт вас у старта маршрута." to "Turn on location: the app is waiting for you at the route start.",
+        "Ожидание у старта отменено" to "Waiting at the start cancelled",
+        "Вы так и не дошли до старта маршрута за 8 часов." to "You did not reach the route start within 8 hours.",
     )
 
     fun setLanguage(ctx: Context, code: String) {

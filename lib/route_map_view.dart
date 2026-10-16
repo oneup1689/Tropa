@@ -34,6 +34,13 @@ class RouteMapView extends StatefulWidget {
   final double height;
   final VoidCallback onFullscreen;
 
+  /// Navigation mode: the camera stays on the person (zoomed in, turned to the direction of walking) until they touch
+  /// the map; "Где я" brings it back.
+  final bool follow;
+
+  /// Added to the style file name, so that two screens showing the same route do not write one file.
+  final String fileTag;
+
   const RouteMapView({
     super.key,
     required this.routeId,
@@ -44,6 +51,8 @@ class RouteMapView extends StatefulWidget {
     required this.preview,
     required this.onFullscreen,
     this.height = 280,
+    this.follow = false,
+    this.fileTag = '',
   });
 
   @override
@@ -58,6 +67,7 @@ class _RouteMapViewState extends State<RouteMapView> {
   double _bearing = 0;
   bool _hasBearing = false;
   String? _problem;
+  late bool _follow = widget.follow;
 
   /// The frame of the route: min/max latitude and longitude.
   late final ({double minLat, double minLon, double maxLat, double maxLon}) _box = _frame();
@@ -123,7 +133,7 @@ class _RouteMapViewState extends State<RouteMapView> {
             id: {'type': 'geojson', 'data': geoFc(const [])},
         },
         layers: _layers(),
-        fileName: 'style_route_${widget.routeId}.json',
+        fileName: 'style_route_${widget.routeId}${widget.fileTag}.json',
       );
       if (!mounted) return;
       setState(() {
@@ -248,7 +258,7 @@ class _RouteMapViewState extends State<RouteMapView> {
       await c.setGeoJsonSource('route', geoFc([geoLine(line)]));
       _styleReady = true;
       await _updateDirection();
-      await _fit();
+      if (!(widget.follow && widget.me.value != null)) await _fit();
       await _onMe();
     } catch (e) {
       DebugLog.instance.log('MAP', 'route map style setup failed: $e');
@@ -298,6 +308,13 @@ class _RouteMapViewState extends State<RouteMapView> {
     ]));
     final far = haversine(p.latitude, p.longitude, _start.lat, _start.lon) > 50;
     await c.setGeoJsonSource('mestart', geoFc(far ? [geoLine([here, _ll(_start)])] : const []));
+    if (widget.follow) {
+      if (_follow) {
+        await c.animateCamera(CameraUpdate.newCameraPosition(
+            CameraPosition(target: here, zoom: 17, bearing: _hasBearing ? _bearing : 0)));
+      }
+      return;
+    }
     if (!_fittedWithMe) {
       // The first position: show the route and the person together (the way to the start is the point).
       _fittedWithMe = true;
@@ -310,7 +327,8 @@ class _RouteMapViewState extends State<RouteMapView> {
   Future<void> _centerOnMe() async {
     final p = widget.me.value;
     if (p == null) return;
-    await _controller?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 15));
+    _follow = widget.follow;
+    await _controller?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), widget.follow ? 17 : 15));
   }
 
   // ------------------------------------------------------------------ no map: download the piece around the route
@@ -408,7 +426,10 @@ class _RouteMapViewState extends State<RouteMapView> {
         height: widget.height,
         child: Stack(children: [
           Positioned.fill(
-            child: MapLibreMap(
+            child: Listener(
+              // The person moved the map by hand: stop following until "Где я" is pressed.
+              onPointerDown: (_) => _follow = false,
+              child: MapLibreMap(
               styleString: _stylePath!,
               initialCameraPosition: CameraPosition(
                 target: LatLng((_box.minLat + _box.maxLat) / 2, (_box.minLon + _box.maxLon) / 2),
@@ -421,13 +442,17 @@ class _RouteMapViewState extends State<RouteMapView> {
               attributionButtonPosition: AttributionButtonPosition.bottomLeft,
               // The map sits inside a scrolling page: it must win the touches that start on it.
               gestureRecognizers: {Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer())},
+              ),
             ),
           ),
           Positioned(
             right: 8,
             top: 8,
             child: Column(children: [
-              _mapButton(Icons.zoom_out_map, t('Весь маршрут'), () => _fit(withMe: widget.me.value != null)),
+              _mapButton(Icons.zoom_out_map, t('Весь маршрут'), () {
+                _follow = false;
+                _fit(withMe: widget.me.value != null);
+              }),
               const SizedBox(height: 6),
               _mapButton(Icons.fullscreen, t('На весь экран'), widget.onFullscreen),
               ValueListenableBuilder<Position?>(

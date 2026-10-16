@@ -122,7 +122,7 @@ class _AutoRecordPageState extends State<AutoRecordPage> with WidgetsBindingObse
               const SizedBox(height: 8),
               Wrap(spacing: 6, children: [
                 for (final m in TravelMode.values)
-                  ChoiceChip(label: Text(m.label), selected: mode == m, onSelected: (_) => setS(() => mode = m)),
+                  ChoiceChip(label: Text(t(m.label)), selected: mode == m, onSelected: (_) => setS(() => mode = m)),
               ]),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

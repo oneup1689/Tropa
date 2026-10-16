@@ -69,3 +69,11 @@ logo_lab/
 
 # Presentation material (personal photos and rendered demo posters): local only
 Фото для презентации/
+
+# signing keys and secrets: never commit
+key.properties
+**/key.properties
+*.jks
+*.keystore
+.env
+**/.env

@@ -85,6 +85,11 @@ class MainActivity : FlutterActivity() {
                         val dir = getExternalFilesDir(null) ?: filesDir
                         result.success(android.os.StatFs(dir.path).availableBytes)
                     }
+                    "setCloudBackup" -> {
+                        getSharedPreferences(TrackingService.PREFS, Context.MODE_PRIVATE).edit()
+                            .putBoolean(TropaBackupAgent.KEY_CLOUD_BACKUP, call.argument<Boolean>("on") ?: false).apply()
+                        result.success(null)
+                    }
                     "setSoundMode" -> {
                         Sounds.setMode(this, call.argument<String>("mode") ?: "both")
                         Sounds.warmUp(this)

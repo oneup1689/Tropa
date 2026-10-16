@@ -18,7 +18,7 @@ import 'settings.dart';
 import 'stats.dart';
 import 'trim.dart';
 import 'poster_scale.dart';
-export 'poster_scale.dart' show LineColoring, LineScale, slopeAvailable;
+export 'poster_scale.dart' show LineColoring, LineScale, pickRelief, slopeAvailable;
 import 'weather.dart';
 import 'l10n.dart';
 import 'units.dart';
@@ -478,6 +478,7 @@ void _drawHeader(Canvas c, PosterOptions o, int startMs, int endMs, int offsetSe
 LineScale buildLineScale(PosterOptions o, TravelMode mode, List<TrackPoint> pts, int i0, int i1, List<TravelMode> modeAt,
     List<double> speeds, List<double> alt) {
   var coloring = o.coloring;
+  if (coloring == LineColoring.relief) coloring = alt.length > i1 ? pickRelief(alt, i0, i1) : LineColoring.single;
   if (coloring == LineColoring.slope && !slopeAvailable(alt, i0, i1)) coloring = LineColoring.single;
   if (coloring == LineColoring.height && alt.length <= i1) coloring = LineColoring.single;
   return LineScale.compute(coloring, mode, pts, i0, i1, modeAt, speeds, alt);
@@ -552,10 +553,11 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
   }
   if (lines.isNotEmpty) {
     drawText(c, lines.join('    '), Offset(64, y), bodyStyle(34, weight: 500), maxWidth: posterW - 128, maxLines: 1);
+    y += 48; // the weather line takes its place: the profile below must not be drawn over it
   }
 
-  // Small elevation profile in the free space above the footer, when the walk has any relief.
-  if (o.profile && y < 1650 && alt.isNotEmpty && i1 > i0) {
+  // Small elevation profile in the free space above the footer (it starts at 1640), when the walk has any relief.
+  if (o.profile && y <= 1644 && alt.isNotEmpty && i1 > i0) {
     drawMiniProfile(c, pts, alt, i0, i1, const Rect.fromLTWH(64, 1640, posterW - 128, 88));
   }
 

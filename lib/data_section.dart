@@ -9,7 +9,6 @@ import 'backup.dart';
 import 'debug_log.dart';
 import 'l10n.dart';
 import 'maps_page.dart';
-import 'auto_record_page.dart';
 import 'recorder.dart';
 import 'settings.dart';
 
@@ -95,6 +94,7 @@ class DataSection extends StatelessWidget {
     final path = DebugLog.instance.path;
     if (path == null) return;
     DebugLog.instance.log('LOG', 'shared by user');
+    // The log has exact coordinates of the walks in it; the person sends it knowingly (it is a help request).
     await SharePlus.instance.share(ShareParams(files: [XFile(path)], text: 'Tropa debug log'));
   }
 
@@ -124,24 +124,4 @@ class DataSection extends StatelessWidget {
       ]),
     );
   }
-}
-/// The row of the "Automatic recording" group: opens the Auto-record screen (24/7 and the planner).
-class AutoRecordTile extends StatelessWidget {
-  const AutoRecordTile({super.key});
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-        listenable: AppSettings.instance,
-        builder: (context, _) => Card(
-          child: ListTile(
-            leading: const Icon(Icons.motion_photos_auto_outlined),
-            title: Text(t('Автозапись')),
-            subtitle: Text(AppSettings.instance.autoMode
-                ? t('Включена: запись начнётся сама, когда вы пойдёте. Там же планировщик.')
-                : t('Запись сама, когда вы пойдёте, или в заданное время')),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AutoRecordPage())),
-          ),
-        ),
-      );
 }

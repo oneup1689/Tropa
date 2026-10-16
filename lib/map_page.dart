@@ -731,12 +731,24 @@ class _MapPageState extends State<MapPage> {
   }
 
   /// Live mode: redraw the recorded part and keep the camera on the current position.
+  bool _ticking = false;
+
   Future<void> _tickLive() async {
     final c = _controller;
     final rec = Recorder.instance;
-    if (c == null || !mounted) return;
+    if (c == null || !mounted || _ticking) return;
+    if (widget.tab && !widget.active) return; // another tab is in front: nobody sees this map
     final sid = rec.sessionId;
     if (widget.tab && !rec.recording) return; // the tab only draws a walk that is being recorded
+    _ticking = true;
+    try {
+      await _drawLive(c, rec, sid);
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  Future<void> _drawLive(MapLibreMapController c, Recorder rec, int? sid) async {
     if (sid != null) {
       final pts = await TrackDb.instance.points(sid);
       final line = [for (final p in pts) LatLng(p.lat, p.lon)];

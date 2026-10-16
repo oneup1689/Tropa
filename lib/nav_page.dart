@@ -2,8 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:geolocator/geolocator.dart';
+
+import 'db.dart';
+import 'heal.dart' show haversine;
 import 'l10n.dart';
 import 'map_page.dart';
+import 'route_map_view.dart';
 import 'recorder.dart';
 import 'route_nav.dart';
 import 'route_navigator.dart';
@@ -35,12 +40,23 @@ class _NavPageState extends State<NavPage> {
   final rec = Recorder.instance;
   Timer? _tick;
 
+  /// The route for the map and the position of the person (made from what the recorder knows).
+  List<({double lat, double lon})>? _points;
+  final ValueNotifier<Position?> _me = ValueNotifier(null);
+
   @override
   void initState() {
     super.initState();
     nav.addListener(_changed);
     rec.addListener(_changed);
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
+    final id = nav.routeId;
+    if (id != null) {
+      TrackDb.instance.routePoints(id).then((p) {
+        if (mounted) setState(() => _points = p);
+      });
+    }
+    _updateMe();
   }
 
   @override
@@ -48,7 +64,35 @@ class _NavPageState extends State<NavPage> {
     _tick?.cancel();
     nav.removeListener(_changed);
     rec.removeListener(_changed);
+    _me.dispose();
     super.dispose();
+  }
+
+  /// The recorder gives the last stored position; the direction of walking comes from the last two of them.
+  void _updateMe() {
+    if (rec.lastLat == 0 && rec.lastLon == 0) return;
+    final prev = _me.value;
+    if (prev != null && prev.latitude == rec.lastLat && prev.longitude == rec.lastLon) return;
+    var heading = prev?.heading ?? 0.0;
+    var speed = 0.0;
+    if (prev != null && haversine(prev.latitude, prev.longitude, rec.lastLat, rec.lastLon) >= 4) {
+      heading = bearingDeg(prev.latitude, prev.longitude, rec.lastLat, rec.lastLon);
+      speed = 1.5; // walking: enough for the map to turn with the person
+    } else if (prev != null) {
+      speed = prev.speed;
+    }
+    _me.value = Position(
+      latitude: rec.lastLat,
+      longitude: rec.lastLon,
+      timestamp: DateTime.now(),
+      accuracy: rec.lastAccuracy,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: heading,
+      headingAccuracy: 0,
+      speed: speed,
+      speedAccuracy: 0,
+    );
   }
 
   void _changed() {
@@ -58,6 +102,7 @@ class _NavPageState extends State<NavPage> {
       Navigator.of(context).maybePop();
       return;
     }
+    _updateMe();
     setState(() {});
   }
 
@@ -144,18 +189,45 @@ class _NavPageState extends State<NavPage> {
         Card(
           color: cs.primaryContainer,
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
-            child: Column(children: [
-              Icon(icon, size: 120, color: cs.onPrimaryContainer),
-              const SizedBox(height: 8),
-              Text(big,
-                  textAlign: TextAlign.center,
-                  style: (s != null && !arrived ? text.displayMedium : text.headlineMedium)?.copyWith(color: cs.onPrimaryContainer)),
-              const SizedBox(height: 4),
-              Text(small, textAlign: TextAlign.center, style: text.titleLarge?.copyWith(color: cs.onPrimaryContainer)),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            child: Row(children: [
+              Icon(icon, size: 76, color: cs.onPrimaryContainer),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(big,
+                        style: (s != null && !arrived ? text.displaySmall : text.headlineMedium)?.copyWith(color: cs.onPrimaryContainer)),
+                  ),
+                  Text(small, style: text.titleMedium?.copyWith(color: cs.onPrimaryContainer)),
+                ]),
+              ),
             ]),
           ),
         ),
+        const SizedBox(height: 4),
+        // The map with the route and the person: the way to go is seen, not only told.
+        if (_points != null && _points!.length >= 2)
+          RouteMapView(
+            routeId: nav.routeId!,
+            fileTag: '_nav',
+            name: nav.routeName,
+            points: _points!,
+            reverse: nav.reverse,
+            me: _me,
+            follow: true,
+            height: (MediaQuery.of(context).size.height * 0.42).clamp(260.0, 520.0),
+            preview: const SizedBox.shrink(),
+            onFullscreen: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => MapPage(
+                    sessionId: rec.sessionId, routeId: nav.routeId, live: true, title: nav.routeName, mode: AppSettings.instance.travelMode),
+              ),
+            ),
+          ),
         if (toStart != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -203,17 +275,6 @@ class _NavPageState extends State<NavPage> {
         ),
         const SizedBox(height: 8),
         Wrap(spacing: 10, runSpacing: 8, children: [
-          OutlinedButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => MapPage(
-                    sessionId: rec.sessionId, routeId: nav.routeId, live: true, title: nav.routeName, mode: AppSettings.instance.travelMode),
-              ),
-            ),
-            icon: const Icon(Icons.map),
-            label: Text(t('Карта')),
-          ),
           FilledButton.icon(
             onPressed: _finish,
             style: FilledButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError),

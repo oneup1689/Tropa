@@ -75,7 +75,17 @@ class _PosterPageState extends State<PosterPage> {
         LineColoring.speed => t('Цвет показывает скорость: синий медленнее, красный быстрее'),
         LineColoring.height => t('Цвет показывает высоту над уровнем моря'),
         LineColoring.slope => t('Тёплый — подъём, холодный — спуск'),
+        // Relief: say what the choice came to for this very walk.
+        LineColoring.relief => _reliefKind == LineColoring.slope
+            ? t('Рельеф: много подъёмов и спусков, цвет показывает крутизну (тёплый — подъём, холодный — спуск)')
+            : t('Рельеф: цвет показывает высоту над уровнем моря'),
       };
+
+  /// What "Relief" turns into for this walk (height or slope; single when the walk is flat).
+  LineColoring get _reliefKind {
+    final alt = _altitude ?? fusedAltitude(_pts);
+    return pickRelief(alt, 0, _pts.length - 1);
+  }
   bool get _hasWater => widget.mode == TravelMode.water || _segments.any((s) => s.mode == TravelMode.water);
 
   @override
@@ -475,19 +485,18 @@ class _PosterPageState extends State<PosterPage> {
                 for (final (v, label) in [
                   (LineColoring.single, t('Один цвет')),
                   (LineColoring.speed, t('Скорость')),
-                  (LineColoring.height, t('Высота')),
-                  (LineColoring.slope, t('Уклон')),
+                  (LineColoring.relief, t('Рельеф')),
                 ])
                   ChoiceChip(
                     label: Text(label),
                     selected: o.coloring == v,
-                    onSelected: v == LineColoring.slope && !_slopeOk ? null : (_) => setState(() => o.coloring = v),
+                    onSelected: v == LineColoring.relief && !_slopeOk ? null : (_) => setState(() => o.coloring = v),
                   ),
               ]),
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  _slopeOk ? _coloringHint() : t('Маршрут ровный'),
+                  _slopeOk ? _coloringHint() : t('Маршрут ровный: «Рельеф» недоступен'),
                   style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ),

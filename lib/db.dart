@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'debug_log.dart';
 import 'modes.dart';
 import 'segments.dart';
 
@@ -70,7 +71,7 @@ class TrackDb {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'tropa.db'),
-      version: 8,
+      version: 9,
       onUpgrade: (db, oldVersion, _) async {
         // The native service may already have added some columns; ignore duplicates.
         if (oldVersion < 2) {
@@ -104,6 +105,14 @@ class TrackDb {
             await db.execute('ALTER TABLE routes ADD COLUMN elevation TEXT');
           } catch (_) {}
         }
+        if (oldVersion < 9) {
+          // Length of a route, kept so that the list of routes does not read every point of every route.
+          try {
+            await db.execute('ALTER TABLE routes ADD COLUMN length_m REAL');
+          } catch (e) {
+            DebugLog.instance.log('DB', 'routes.length_m not added (already there?): $e');
+          }
+        }
       },
       onCreate: (db, _) async {
         await db.execute('CREATE TABLE IF NOT EXISTS sessions('
@@ -132,7 +141,7 @@ class TrackDb {
         'session_id INTEGER PRIMARY KEY, region TEXT, weather TEXT, water_temp REAL, elevation TEXT, title TEXT, '
         'route_id INTEGER)');
     await db.execute('CREATE TABLE IF NOT EXISTS routes('
-        'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL, elevation TEXT)');
+        'id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_ms INTEGER NOT NULL, elevation TEXT, length_m REAL)');
     await db.execute('CREATE TABLE IF NOT EXISTS route_points('
         'route_id INTEGER NOT NULL, idx INTEGER NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, '
         'PRIMARY KEY (route_id, idx))');
@@ -239,11 +248,14 @@ class TrackDb {
 
   Future<void> deleteSession(int id) async {
     final db = await database;
-    await db.delete('points', where: 'session_id = ?', whereArgs: [id]);
-    await db.delete('notes', where: 'session_id = ?', whereArgs: [id]);
-    await db.delete('segment_overrides', where: 'session_id = ?', whereArgs: [id]);
-    await db.delete('session_meta', where: 'session_id = ?', whereArgs: [id]);
-    await db.delete('sessions', where: 'id = ?', whereArgs: [id]);
+    // One transaction: a kill in the middle must not leave a walk without its points or the other way round.
+    await db.transaction((txn) async {
+      await txn.delete('points', where: 'session_id = ?', whereArgs: [id]);
+      await txn.delete('notes', where: 'session_id = ?', whereArgs: [id]);
+      await txn.delete('segment_overrides', where: 'session_id = ?', whereArgs: [id]);
+      await txn.delete('session_meta', where: 'session_id = ?', whereArgs: [id]);
+      await txn.delete('sessions', where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   // ---------------------------------------------------------------- notes
@@ -346,7 +358,12 @@ class TrackDb {
   Future<int> addRoute(String name, List<({double lat, double lon})> pts) async {
     final db = await database;
     return db.transaction((txn) async {
-      final id = await txn.insert('routes', {'name': name, 'created_ms': DateTime.now().millisecondsSinceEpoch});
+      var len = 0.0;
+      for (var i = 1; i < pts.length; i++) {
+        len += _hav(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+      }
+      final id = await txn.insert(
+          'routes', {'name': name, 'created_ms': DateTime.now().millisecondsSinceEpoch, 'length_m': len});
       final batch = txn.batch();
       for (var i = 0; i < pts.length; i++) {
         batch.insert('route_points', {'route_id': id, 'idx': i, 'lat': pts[i].lat, 'lon': pts[i].lon});
@@ -358,16 +375,22 @@ class TrackDb {
 
   Future<List<RouteInfo>> routes() async {
     final db = await database;
-    final rows = await db.query('routes', orderBy: 'id DESC');
+    final rows = await db.rawQuery('SELECT r.id AS id, r.name AS name, r.length_m AS length_m, '
+        '(SELECT COUNT(*) FROM route_points p WHERE p.route_id = r.id) AS n FROM routes r ORDER BY r.id DESC');
     final out = <RouteInfo>[];
     for (final r in rows) {
       final id = r['id'] as int;
-      final pts = await routePoints(id);
-      var len = 0.0;
-      for (var i = 1; i < pts.length; i++) {
-        len += _hav(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+      var len = (r['length_m'] as num?)?.toDouble();
+      if (len == null) {
+        // A route saved before the length was kept: measured once, then stored.
+        final pts = await routePoints(id);
+        len = 0.0;
+        for (var i = 1; i < pts.length; i++) {
+          len = len! + _hav(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+        }
+        await db.update('routes', {'length_m': len}, where: 'id = ?', whereArgs: [id]);
       }
-      out.add(RouteInfo(id, r['name'] as String, pts.length, len));
+      out.add(RouteInfo(id, r['name'] as String, (r['n'] as num).toInt(), len!));
     }
     return out;
   }

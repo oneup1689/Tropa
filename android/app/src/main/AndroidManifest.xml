@@ -17,7 +17,12 @@
     <application
         android:label="Tropa"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:fullBackupOnly="true"
+        android:backupAgent=".TropaBackupAgent"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"

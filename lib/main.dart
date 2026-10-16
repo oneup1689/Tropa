@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
 import 'package:permission_handler/permission_handler.dart';
 
 import 'app_hooks.dart';
@@ -39,10 +41,38 @@ Future<void> main() async {
   await AppSettings.instance.load();
   await Geoid.instance.load();
   FlutterError.onError = (d) => DebugLog.instance.log('FLUTTER_ERROR', d.exceptionAsString());
+  // Errors outside the widget tree (futures, timers, platform calls) end up in the log too, not nowhere.
+  PlatformDispatcher.instance.onError = (error, stack) {
+    DebugLog.instance.log('UNCAUGHT', '$error\n${stack.toString().split('\n').take(6).join('\n')}');
+    return true;
+  };
   await _logDevice();
+  _cleanTemp(); // in the background
   await Recorder.instance.init();
   await RouteNavigator.instance.restore();
   runApp(TropaApp());
+}
+
+/// Files made for sharing (GPX, backups, posters) lie in the cache folder with the person's places in them: files
+/// older than a day are removed at the start. (Right after sharing they cannot be deleted: the other app reads them later.)
+Future<void> _cleanTemp() async {
+  try {
+    final dir = await getTemporaryDirectory();
+    final limit = DateTime.now().subtract(const Duration(days: 1));
+    var n = 0;
+    await for (final e in dir.list()) {
+      if (e is! File) continue;
+      final name = e.uri.pathSegments.last;
+      final ours = (name.startsWith('tropa_') && (name.endsWith('.gpx') || name.endsWith('.zip'))) || name.endsWith('.png');
+      if (ours && (await e.lastModified()).isBefore(limit)) {
+        await e.delete();
+        n++;
+      }
+    }
+    if (n > 0) DebugLog.instance.log('APP', 'removed $n old files from the cache');
+  } catch (e) {
+    DebugLog.instance.log('APP', 'cache cleanup failed: $e');
+  }
 }
 
 Future<void> _logDevice() async {
@@ -123,6 +153,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _weekM = 0; // distance and number of the walks of the last 7 days (idle start card)
   int _weekN = 0;
   int _section = 0; // the Trails tab: 0 walked, 1 routes
+  int _walksLimit = 50; // how many walks the list loads; "Show more" adds a page
   List<RouteInfo> routes = [];
 
   @override
@@ -135,7 +166,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     AppSettings.instance.addListener(_onChange); // e.g. Pro mode switched on: the menu shows the extra items
     var tick = 0;
     _ticker = Timer.periodic(Duration(seconds: 1), (_) {
-      if (!rec.recording) return;
+      if (!rec.recording || !_resumed) return; // nobody looks at the screen: no redraws and no list reloads
       _onChange();
       // Keep the list (point counts, the new walk) fresh while a recording is running.
       if (++tick % 5 == 0) _reload();
@@ -168,9 +199,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  bool _resumed = true;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshReadiness(); // back from the system settings
+    _resumed = state == AppLifecycleState.resumed;
+    if (_resumed) {
+      _refreshReadiness(); // back from the system settings
+      if (rec.recording) _reload();
+    }
   }
 
   Future<void> _refreshReadiness() async {
@@ -190,7 +227,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _reload() async {
-    final s = await TrackDb.instance.sessions();
+    final s = await TrackDb.instance.sessions(limit: _walksLimit);
     final r = await TrackDb.instance.routes();
     if (mounted) {
       setState(() {
@@ -505,6 +542,17 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (_section == 0) ...[
             if (sessions.isEmpty) _emptyState(context),
             for (final s in sessions) _sessionCard(context, s),
+            if (sessions.length >= _walksLimit)
+              Center(
+                child: TextButton.icon(
+                  onPressed: () {
+                    _walksLimit += 50;
+                    _reload();
+                  },
+                  icon: const Icon(Icons.expand_more),
+                  label: Text(t('Показать ещё')),
+                ),
+              ),
           ] else
             RoutesSection(routes: routes, onChanged: _reload),
         ],
@@ -1019,7 +1067,29 @@ class _StatusPill extends StatefulWidget {
 }
 
 class _StatusPillState extends State<_StatusPill> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+  // The dot pulses only while recording: a repeating animation keeps the screen redrawing all the time.
+  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StatusPill old) {
+    super.didUpdateWidget(old);
+    _syncPulse();
+  }
+
+  void _syncPulse() {
+    final pulsing = widget.recording && !widget.paused;
+    if (pulsing && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!pulsing && _pulse.isAnimating) {
+      _pulse.stop();
+    }
+  }
 
   @override
   void dispose() {

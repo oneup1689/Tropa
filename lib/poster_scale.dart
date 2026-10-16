@@ -9,7 +9,10 @@ import 'modes.dart';
 
 /// How the line of the poster is coloured. Stretches travelled by vehicle are always drawn dashed on top
 /// of any of these (see [LineScale.vehicleAt]).
-enum LineColoring { single, speed, height, slope }
+///
+/// [relief] is what the person chooses ("Рельеф"): [pickRelief] turns it into [height] or [slope] (or [single] on a flat
+/// walk) by the shape of the walk, so that nobody has to know the difference. A [LineScale] never holds [relief].
+enum LineColoring { single, speed, relief, height, slope }
 
 /// A relief smaller than this (metres between the lowest and the highest point) is too flat for a slope colouring:
 /// GPS and terrain-model noise would be the whole picture.
@@ -23,6 +26,40 @@ bool slopeAvailable(List<double> alt, int i0, int i1) {
     hi = math.max(hi, alt[i]);
   }
   return hi - lo >= minReliefForSlope;
+}
+
+/// Which relief colouring tells more about this walk.
+///
+/// Flat (under [minReliefForSlope] between the lowest and the highest point): nothing to show, one colour.
+/// Otherwise the walk is described by its range (highest minus lowest) and by how much it climbs and descends in
+/// total (gain + loss, small ups and downs under [hysteresisM] ignored):
+/// - total close to the range (one climb, one descent, or up and back down a hill) and a real range (40 m and more):
+///   the height colouring, which shows where the high point is;
+/// - the walk goes up and down many times (total over 2.6 times the range): the slope colouring, which shows which
+///   stretches were steep (the height colours would be a muddle of the same few shades);
+/// - a small range (15-40 m): the height colouring, smooth; slopes of such a walk are mostly GPS noise.
+LineColoring pickRelief(List<double> alt, int i0, int i1, {double hysteresisM = 6}) {
+  if (!slopeAvailable(alt, i0, i1)) return LineColoring.single;
+  var lo = alt[i0], hi = alt[i0];
+  for (var i = i0; i <= i1; i++) {
+    lo = math.min(lo, alt[i]);
+    hi = math.max(hi, alt[i]);
+  }
+  final range = hi - lo;
+  if (range < 40) return LineColoring.height;
+  // Total climb and descent with a dead band, as a hiking app counts them.
+  var ref = alt[i0], gain = 0.0, loss = 0.0;
+  for (var i = i0 + 1; i <= i1; i++) {
+    final d = alt[i] - ref;
+    if (d >= hysteresisM) {
+      gain += d;
+      ref = alt[i];
+    } else if (d <= -hysteresisM) {
+      loss -= d;
+      ref = alt[i];
+    }
+  }
+  return (gain + loss) > 2.6 * range ? LineColoring.slope : LineColoring.height;
 }
 
 /// Everything the colour of the line and its scale bar need, computed once for the part of the track that is shown.
@@ -146,6 +183,7 @@ class LineScale {
   Color colorAt(int i) {
     switch (coloring) {
       case LineColoring.single:
+      case LineColoring.relief:
         return brandAccent;
       case LineColoring.speed:
         final fast = split && _modeAt[i] == TravelMode.car;

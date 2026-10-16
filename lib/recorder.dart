@@ -85,6 +85,7 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
   SessionInfo? interrupted;
 
   String? _lastModes;
+  bool _foreground = true; // the app is on the screen
 
   // iOS-only state
   StreamSubscription<Position>? _sub;
@@ -101,12 +102,19 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     _sendLanguage();
     AppSettings.instance.addListener(_sendSoundMode);
     _sendSoundMode();
+    AppSettings.instance.addListener(_sendCloudBackup);
+    _sendCloudBackup();
     _watchModes();
     if (Platform.isAndroid) {
       await _refresh();
-      Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
+      Timer.periodic(const Duration(seconds: 1), (_) {
+        // In the background with nothing to follow there is no one to show the status to.
+        if (!_foreground && !recording && !waiting && !watching) return;
+        _refresh();
+      });
       // 24/7 survives the app being closed; re-assert it in case the process was restarted.
-      if (AppSettings.instance.autoMode) await applyAutoMode();
+      // No permission dialog here: it would hold the first screen; the switch asks when it is turned on.
+      if (AppSettings.instance.autoMode) await applyAutoMode(ask: false);
     }
     if (!recording) {
       final prev = await TrackDb.instance.activeSession();
@@ -132,6 +140,17 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
     if (mode == _soundModeSent) return;
     _soundModeSent = mode;
     _sys.invokeMethod<void>('setSoundMode', {'mode': mode}).catchError((Object _) {});
+  }
+
+  bool? _cloudBackupSent;
+
+  /// The system backup agent (native) asks this flag before it copies the walks database.
+  void _sendCloudBackup() {
+    if (!Platform.isAndroid) return;
+    final on = AppSettings.instance.getBool('cloud_backup');
+    if (on == _cloudBackupSent) return;
+    _cloudBackupSent = on;
+    _sys.invokeMethod<void>('setCloudBackup', {'on': on}).catchError((Object _) {});
   }
 
   void _sendLanguage() {
@@ -330,11 +349,13 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Applies the "Автозапись 24/7" setting: starts or stops the movement watcher.
   /// The step counter needs the "physical activity" permission.
-  Future<void> applyAutoMode() async {
+  Future<void> applyAutoMode({bool ask = true}) async {
     if (!Platform.isAndroid) return;
     if (AppSettings.instance.autoMode) {
-      final perm = await Permission.activityRecognition.request();
-      _log.log('PERM', 'activityRecognition=$perm');
+      if (ask) {
+        final perm = await Permission.activityRecognition.request();
+        _log.log('PERM', 'activityRecognition=$perm');
+      }
       await _sys.invokeMethod('watch', _serviceArgs(TravelMode.mixed));
       _log.log('AUTO', 'UI enabled 24/7 mode');
     } else {
@@ -505,6 +526,8 @@ class Recorder extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) _refresh();
     _log.log('LIFECYCLE', '$state recording=$recording');
   }
 }
