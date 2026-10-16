@@ -1,17 +1,38 @@
-# tropa
+# Tropa
 
-A new Flutter project.
+Offline GPS tracker for walking and cycling (Flutter, Android; iOS in progress).
+Офлайн GPS-трекер ходьбы и велопрогулок.
 
-## Getting Started
+- **Reliable recording.** A native Android foreground service writes the track, so the recording survives the app being closed or killed. Gaps are healed on display; the raw points are never altered.
+- **Fully offline.** Recording, statistics and maps work without internet. Maps are downloaded by region (OpenStreetMap data in PMTiles format).
+- **Private.** No account, no server. Your tracks stay on the phone.
+- **Modes.** Walking, cycling, car, mixed. Auto-record (24/7) starts a walk by itself when you start moving.
+- **Routes.** Import GPX, turn-by-turn voice navigation, off-route alerts, "wait at the start".
+- **Posters.** Turn a walk into a shareable picture (speed or relief colouring, photo notes, weather, elevation profile).
+- Russian and English interface, km or miles.
 
-This project is a starting point for a Flutter application.
+## Install (Android)
 
-A few resources to get you started if this is your first Flutter project:
+Download `Tropa-<version>.apk` from the [Releases](https://github.com/oneup1689/Tropa/releases) page and open it on the phone
+(allow installing from this source when asked). Updates are signed with the same key, so a new version installs over the old one.
+Release signing certificate SHA-256 is published in each release's notes.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Build
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```
+flutter pub get
+flutter test
+flutter build apk --release
+```
+
+Needs Flutter (see `pubspec.yaml`) and the Android SDK. Without `android/key.properties` the release build is signed with the debug key.
+
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md). Short version: coordinates stay on the device; only optional poster features
+(weather, elevation, place name) and map downloads use the internet.
+
+## License
+
+[GPL-3.0-or-later](LICENSE). Map data © OpenStreetMap contributors (ODbL), styling by Protomaps.
+Fonts Rubik and Unbounded are under the SIL Open Font License.
