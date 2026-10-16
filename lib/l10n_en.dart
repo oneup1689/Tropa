@@ -665,4 +665,8 @@ const Map<String, String> enStrings = {
       'Relief: many climbs and descents, the colour shows steepness (warm — climb, cool — descent)',
   'Рельеф: цвет показывает высоту над уровнем моря': 'Relief: the colour shows the height above sea level',
   'Маршрут ровный: «Рельеф» недоступен': 'The route is flat: "Relief" is not available',
+  'Авто': 'Auto',
+  'Цвет': 'Colour',
+  'Авто: скорость, если были транспорт или велосипед; рельеф на холмах; иначе свой цвет у каждой прогулки':
+      'Auto: speed when there was a vehicle or a bike; relief on hills; otherwise each walk has its own colour',
 };

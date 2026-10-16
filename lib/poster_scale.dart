@@ -10,9 +10,51 @@ import 'modes.dart';
 /// How the line of the poster is coloured. Stretches travelled by vehicle are always drawn dashed on top
 /// of any of these (see [LineScale.vehicleAt]).
 ///
+/// [auto] is the default: [pickAuto] looks at the walk and takes speed, relief or a single colour of the walk.
 /// [relief] is what the person chooses ("Рельеф"): [pickRelief] turns it into [height] or [slope] (or [single] on a flat
 /// walk) by the shape of the walk, so that nobody has to know the difference. A [LineScale] never holds [relief].
-enum LineColoring { single, speed, relief, height, slope }
+enum LineColoring { auto, single, speed, relief, height, slope }
+
+/// Colours for a single-colour line: bright enough for the dark poster and for the dark map.
+const List<Color> posterPalette = [
+  Color(0xFFFF7043), // orange (the colour of the brand)
+  Color(0xFF1DE9B6), // mint
+  Color(0xFFFFCA28), // amber
+  Color(0xFF40C4FF), // sky
+  Color(0xFFFF4081), // pink
+  Color(0xFFC6FF00), // lime
+  Color(0xFFB388FF), // violet
+  Color(0xFFFF5252), // red
+];
+
+/// The colour a walk gets by itself: the same walk always has the same colour (it comes from the start time),
+/// different walks differ.
+int posterColorIndex(int startMs) {
+  final h = (startMs ~/ 86400000) * 31 + (startMs ~/ 3600000) * 7 + (startMs ~/ 60000);
+  return h.abs() % posterPalette.length;
+}
+
+/// What "Auto" turns into for this walk: speed when it had several ways of travelling or a vehicle (the colours then
+/// tell the taxi from the walk), relief when the walk has a real range of heights (40 m and more), speed again when the
+/// pace changed a lot, otherwise one colour. [modeAt] is the way of travelling at every point.
+LineColoring pickAuto(TravelMode mode, List<TravelMode> modeAt, List<double> speeds, List<double> alt, int i0, int i1) {
+  var vehicle = mode == TravelMode.car || mode == TravelMode.bike;
+  for (var i = i0; i <= i1 && !vehicle; i++) {
+    if (modeAt[i] == TravelMode.car || modeAt[i] == TravelMode.bike) vehicle = true;
+  }
+  if (vehicle) return LineColoring.speed;
+  if (alt.length > i1) {
+    var lo = alt[i0], hi = alt[i0];
+    for (var i = i0; i <= i1; i++) {
+      lo = math.min(lo, alt[i]);
+      hi = math.max(hi, alt[i]);
+    }
+    if (hi - lo >= 40) return LineColoring.relief;
+  }
+  final v = [for (var i = i0; i <= i1; i++) if (speeds[i] > 0.5) speeds[i]]..sort();
+  if (v.length >= 20 && v[(v.length * 0.9).floor()] - v[(v.length * 0.1).floor()] >= 0.6) return LineColoring.speed;
+  return LineColoring.single;
+}
 
 /// A relief smaller than this (metres between the lowest and the highest point) is too flat for a slope colouring:
 /// GPS and terrain-model noise would be the whole picture.
@@ -80,9 +122,10 @@ class LineScale {
   final List<double> _speeds;
   final List<double> _alt;
   final List<TravelMode> _modeAt;
+  final Color singleColor;
 
   LineScale._(this.coloring, this.split, this.walkLo, this.walkHi, this.vehicleLo, this.vehicleHi, this.heightLo, this.heightHi,
-      this.slopeLimit, this.slope, this.vehicleAt, this._speeds, this._alt, this._modeAt);
+      this.slopeLimit, this.slope, this.vehicleAt, this._speeds, this._alt, this._modeAt, this.singleColor);
 
   static double _percentile(List<double> sorted, double q, double fallback) =>
       sorted.isEmpty ? fallback : sorted[math.min(sorted.length - 1, (sorted.length * q).floor())];
@@ -106,7 +149,8 @@ class LineScale {
       };
 
   static LineScale compute(LineColoring coloring, TravelMode mode, List<TrackPoint> pts, int i0, int i1, List<TravelMode> modeAt,
-      List<double> speeds, List<double> alt) {
+      List<double> speeds, List<double> alt,
+      {Color? singleColor}) {
     final walk = <double>[], vehicle = <double>[];
     var vehiclePts = 0, otherPts = 0;
     for (var i = i0; i <= i1; i++) {
@@ -150,6 +194,7 @@ class LineScale {
       speeds,
       alt,
       modeAt,
+      singleColor ?? brandAccent,
     );
   }
 
@@ -183,8 +228,9 @@ class LineScale {
   Color colorAt(int i) {
     switch (coloring) {
       case LineColoring.single:
+      case LineColoring.auto:
       case LineColoring.relief:
-        return brandAccent;
+        return singleColor;
       case LineColoring.speed:
         final fast = split && _modeAt[i] == TravelMode.car;
         final lo = fast ? vehicleLo : walkLo, hi = fast ? vehicleHi : walkHi;

@@ -42,7 +42,7 @@ IconData modeIcon(TravelMode m) => switch (m) {
       TravelMode.bike => Icons.directions_bike,
       TravelMode.car => Icons.directions_car,
       TravelMode.water => Icons.kayaking,
-      TravelMode.mixed => Icons.alt_route,
+      TravelMode.mixed => Icons.commute, // walking and a vehicle in one walk (alt_route is the Routes icon)
     };
 
 class _Loaded {
@@ -190,7 +190,7 @@ class _RouteViewPageState extends State<RouteViewPage> {
           PopupMenuItem(value: 'follow', child: ListTile(leading: const Icon(Icons.navigation), title: Text(t('Идти по этому маршруту')), dense: true)),
           PopupMenuItem(value: 'route', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Сохранить как маршрут')), dense: true)),
           PopupMenuItem(value: 'rename', child: ListTile(leading: const Icon(Icons.edit_outlined), title: Text(t('Переименовать')), dense: true)),
-          PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.alt_route), title: Text(t('Изменить режим')), dense: true)),
+          PopupMenuItem(value: 'mode', child: ListTile(leading: const Icon(Icons.commute), title: Text(t('Изменить режим')), dense: true)),
           PopupMenuItem(value: 'delete', enabled: !_isRecording, child: ListTile(leading: const Icon(Icons.delete_outline), title: Text(t('Удалить')), dense: true)),
         ],
       );

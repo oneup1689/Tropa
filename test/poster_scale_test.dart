@@ -57,6 +57,30 @@ void main() {
     expect(pickRelief(small, 0, small.length - 1), LineColoring.height); // 25 m: too little for slopes
   });
 
+  test('auto colouring: vehicle -> speed, hills -> relief, flat and steady -> one colour', () {
+    final walk = _track([(1.4, 300, 0.0)]);
+    final n = walk.length;
+    final walkMode = List<TravelMode>.filled(n, TravelMode.walk);
+    final steady = [for (final p in walk) p.speed];
+    final flat = List<double>.filled(n, 100);
+    final hill = [for (var i = 0; i < n; i++) 100 + 80.0 * i / n];
+    expect(pickAuto(TravelMode.walk, walkMode, steady, flat, 0, n - 1), LineColoring.single);
+    expect(pickAuto(TravelMode.walk, walkMode, steady, hill, 0, n - 1), LineColoring.relief);
+    expect(pickAuto(TravelMode.bike, walkMode, steady, flat, 0, n - 1), LineColoring.speed);
+    final withTaxi = [...walkMode.take(n - 50), ...List<TravelMode>.filled(50, TravelMode.car)];
+    expect(pickAuto(TravelMode.mixed, withTaxi, steady, flat, 0, n - 1), LineColoring.speed);
+    final varied = [for (var i = 0; i < n; i++) i.isEven ? 0.8 : 2.2];
+    expect(pickAuto(TravelMode.walk, walkMode, varied, flat, 0, n - 1), LineColoring.speed);
+  });
+
+  test('the colour of a walk is stable and walks differ', () {
+    final a = posterColorIndex(1760000000000), b = posterColorIndex(1760000000000);
+    expect(a, b);
+    final seen = {for (var d = 0; d < 40; d++) posterColorIndex(1760000000000 + d * 86400000 + d * 7919000)};
+    expect(seen.length, greaterThan(3));
+    expect(a, inInclusiveRange(0, posterPalette.length - 1));
+  });
+
   test('a walk with a taxi ride gets separate speed scales and a dashed vehicle stretch', () {
     final pts = _track([(1.4, 300, 0), (12.0, 240, 0), (1.4, 120, 0)]);
     final speeds = [for (final p in pts) p.speed];

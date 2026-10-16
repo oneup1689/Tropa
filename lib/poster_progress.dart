@@ -9,8 +9,9 @@ import 'poster.dart';
 import 'poster_wide.dart';
 import 'theme.dart';
 
-/// Shown while a poster is being made: the route of the walk is drawn as a line, over and over, until the poster is
-/// ready. With a map snapshot ([map], taken for the poster) the line is drawn on that map, darkened, exactly where it
+/// Shown while a poster is being made: the route of the walk is drawn as a line, once, in [duration], and then the
+/// finished line rests with a pulsing head until the poster is ready. The page starts the drawing again by changing
+/// [restartToken] (when the real work begins, after the map step), so that nobody sees half of it. With a map snapshot ([map], taken for the poster) the line is drawn on that map, darkened, exactly where it
 /// will be on the poster; without a map on the dark green background of the app.
 class PosterBuildOverlay extends StatefulWidget {
   final List<TrackPoint> points;
@@ -19,14 +20,24 @@ class PosterBuildOverlay extends StatefulWidget {
   /// The horizontal "pro map" poster: its canvas is 1800 x 1200 instead of 1080 x 1920.
   final bool wide;
 
-  const PosterBuildOverlay({super.key, required this.points, this.map, this.wide = false});
+  /// How long the line takes to draw.
+  final Duration duration;
+
+  /// A new value draws the line again from the start.
+  final int restartToken;
+
+  const PosterBuildOverlay(
+      {super.key, required this.points, this.map, this.wide = false, this.duration = const Duration(milliseconds: 2400), this.restartToken = 0});
 
   @override
   State<PosterBuildOverlay> createState() => _PosterBuildOverlayState();
 }
 
-class _PosterBuildOverlayState extends State<PosterBuildOverlay> with SingleTickerProviderStateMixin {
-  late final AnimationController _ctl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600))..repeat();
+class _PosterBuildOverlayState extends State<PosterBuildOverlay> with TickerProviderStateMixin {
+  late final AnimationController _ctl = AnimationController(vsync: this, duration: widget.duration)..forward();
+  // The head of the line pulses all the time, so a long wait never looks frozen.
+  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat(reverse: true);
+  late final Listenable _tick = Listenable.merge([_ctl, _pulse]);
   late final List<Offset> _norm = _normalize(widget.points);
   ui.Image? _mapImage;
   List<Offset> _onMap = const []; // the route in the pixels of the poster canvas, when there is a map
@@ -42,6 +53,10 @@ class _PosterBuildOverlayState extends State<PosterBuildOverlay> with SingleTick
     super.didUpdateWidget(old);
     // The map snapshot arrives after the overlay was created (it is taken first, on its own screen).
     if (widget.map != null && old.map != widget.map) _loadMap();
+    if (widget.restartToken != old.restartToken) {
+      _ctl.duration = widget.duration;
+      _ctl.forward(from: 0);
+    }
   }
 
   Future<void> _loadMap() async {
@@ -69,6 +84,7 @@ class _PosterBuildOverlayState extends State<PosterBuildOverlay> with SingleTick
   @override
   void dispose() {
     _ctl.dispose();
+    _pulse.dispose();
     _mapImage?.dispose();
     super.dispose();
   }
@@ -103,13 +119,14 @@ class _PosterBuildOverlayState extends State<PosterBuildOverlay> with SingleTick
         if (hasMap)
           Positioned.fill(
             child: AnimatedBuilder(
-              animation: _ctl,
+              animation: _tick,
               builder: (_, _) => CustomPaint(
                 painter: _MapTrailPainter(
                   _mapImage!,
                   _onMap,
                   widget.wide ? const Size(wideW, wideH) : const Size(posterW, posterH),
                   Curves.easeInOutCubic.transform(_ctl.value),
+                  _pulse.value,
                 ),
               ),
             ),
@@ -123,8 +140,8 @@ class _PosterBuildOverlayState extends State<PosterBuildOverlay> with SingleTick
                   child: Padding(
                     padding: const EdgeInsets.all(40),
                     child: AnimatedBuilder(
-                      animation: _ctl,
-                      builder: (_, _) => CustomPaint(painter: _TrailPainter(_norm, Curves.easeInOutCubic.transform(_ctl.value))),
+                      animation: _tick,
+                      builder: (_, _) => CustomPaint(painter: _TrailPainter(_norm, Curves.easeInOutCubic.transform(_ctl.value), _pulse.value)),
                     ),
                   ),
                 ),
@@ -157,8 +174,9 @@ class _MapTrailPainter extends CustomPainter {
   final List<Offset> route; // poster canvas pixels
   final Size canvas;
   final double progress;
+  final double pulse; // 0..1, the head of the line breathes
 
-  _MapTrailPainter(this.image, this.route, this.canvas, this.progress);
+  _MapTrailPainter(this.image, this.route, this.canvas, this.progress, this.pulse);
 
   @override
   void paint(Canvas c, Size size) {
@@ -204,6 +222,7 @@ class _MapTrailPainter extends CustomPainter {
     );
     final head = metric.getTangentForOffset(metric.length * progress)?.position;
     if (head != null) {
+      c.drawCircle(head, 12 + 4 * pulse, Paint()..color = Colors.white.withValues(alpha: 0.25));
       c.drawCircle(head, 10, Paint()..color = Colors.white);
       c.drawCircle(head, 5.5, Paint()..color = TropaColors.orange);
     }
@@ -211,14 +230,15 @@ class _MapTrailPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_MapTrailPainter old) => old.progress != progress || old.image != image;
+  bool shouldRepaint(_MapTrailPainter old) => old.progress != progress || old.pulse != pulse || old.image != image;
 }
 
 class _TrailPainter extends CustomPainter {
   final List<Offset> points;
   final double progress;
+  final double pulse;
 
-  _TrailPainter(this.points, this.progress);
+  _TrailPainter(this.points, this.progress, this.pulse);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -260,11 +280,12 @@ class _TrailPainter extends CustomPainter {
     );
     final head = metric.getTangentForOffset(metric.length * progress)?.position;
     if (head != null) {
+      canvas.drawCircle(head, 11 + 4 * pulse, Paint()..color = Colors.white.withValues(alpha: 0.25));
       canvas.drawCircle(head, 9, Paint()..color = Colors.white);
       canvas.drawCircle(head, 5, Paint()..color = TropaColors.orange);
     }
   }
 
   @override
-  bool shouldRepaint(_TrailPainter old) => old.progress != progress || old.points != points;
+  bool shouldRepaint(_TrailPainter old) => old.progress != progress || old.pulse != pulse || old.points != points;
 }

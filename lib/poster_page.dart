@@ -58,6 +58,9 @@ class _PosterPageState extends State<PosterPage> {
   bool _loading = true;
   bool _hasMap = false;
   bool _busy = false;
+  int _drawToken = 0; // a new value makes the animation draw the line from the start
+  bool _madeBefore = false; // the first poster gets the full show, the next ones (another colouring) a shorter one
+  Duration get _drawTime => Duration(milliseconds: _madeBefore ? 1500 : 2400);
   final ScrollController _scroll = ScrollController();
   MapCapture? _buildMap; // the map snapshot of the poster being made, for the animation
   Uint8List? _png;
@@ -71,6 +74,7 @@ class _PosterPageState extends State<PosterPage> {
   bool get _hasVehicle => _segments.any((s) => s.mode == TravelMode.car) && _segments.any((s) => s.mode != TravelMode.car);
 
   String _coloringHint() => switch (o.coloring) {
+        LineColoring.auto => t('Авто: скорость, если были транспорт или велосипед; рельеф на холмах; иначе свой цвет у каждой прогулки'),
         LineColoring.single => t('Линия одного цвета'),
         LineColoring.speed => t('Цвет показывает скорость: синий медленнее, красный быстрее'),
         LineColoring.height => t('Цвет показывает высоту над уровнем моря'),
@@ -297,6 +301,28 @@ class _PosterPageState extends State<PosterPage> {
     );
   }
 
+  /// The palette of the single-colour line; the colour the walk gets by itself is marked as chosen until another is picked.
+  Widget _colorSwatches() {
+    final chosen = o.lineColorIndex ?? (_pts.isEmpty ? 0 : posterColorIndex(_pts.first.tsMs));
+    final cs = Theme.of(context).colorScheme;
+    return Wrap(spacing: 12, runSpacing: 10, children: [
+      for (var i = 0; i < posterPalette.length; i++)
+        GestureDetector(
+          onTap: () => setState(() => o.lineColorIndex = i),
+          child: Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: posterPalette[i],
+              shape: BoxShape.circle,
+              border: Border.all(color: i == chosen ? cs.onSurface : Colors.transparent, width: 3),
+            ),
+            child: i == chosen ? Icon(Icons.check, size: 20, color: Colors.black.withValues(alpha: 0.7)) : null,
+          ),
+        ),
+    ]);
+  }
+
   Future<void> _create() async {
     if (_pts.length < 2) {
       _snack(t('Для постера нужны хотя бы две точки маршрута'));
@@ -333,7 +359,11 @@ class _PosterPageState extends State<PosterPage> {
           _snack(t('Карты для этого места нет: постер сделан в стиле Tropa. Карты добавляются в разделе «Карты».'));
         }
       }
-      final started = DateTime.now(); // the drawing of the route is shown for one full pass after the map step
+      // The real work begins here: the animation draws the line once from the start, and the poster is not shown
+      // before that drawing has ended (plus a short rest), however fast the poster itself is ready.
+      final drawTime = _drawTime;
+      if (mounted) setState(() => _drawToken++);
+      final started = DateTime.now();
       final png = o.format == PosterFormat.horizontal
           ? await composeWidePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
@@ -341,10 +371,10 @@ class _PosterPageState extends State<PosterPage> {
           : await composePoster(
               o: o, pts: _pts, segments: _segments, mode: widget.mode, weather: _weather, map: map, notes: _notes,
               noteThumbs: _thumbs, altitude: _altitude, altitudeFused: _altitude != null);
-      // A quick poster still gets one full drawing of the route on screen.
-      final left = const Duration(milliseconds: 2600) - DateTime.now().difference(started);
+      final left = drawTime + const Duration(milliseconds: 500) - DateTime.now().difference(started);
       if (left > Duration.zero) await Future<void>.delayed(left);
       if (!mounted) return;
+      _madeBefore = true;
       setState(() => _png = png);
       // Show the new poster: it sits at the top of the screen, the person pressed the button at the bottom.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -483,9 +513,10 @@ class _PosterPageState extends State<PosterPage> {
               const SizedBox(height: 8),
               Wrap(spacing: 8, children: [
                 for (final (v, label) in [
-                  (LineColoring.single, t('Один цвет')),
+                  (LineColoring.auto, t('Авто')),
                   (LineColoring.speed, t('Скорость')),
                   (LineColoring.relief, t('Рельеф')),
+                  (LineColoring.single, t('Цвет')),
                 ])
                   ChoiceChip(
                     label: Text(label),
@@ -496,10 +527,11 @@ class _PosterPageState extends State<PosterPage> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  _slopeOk ? _coloringHint() : t('Маршрут ровный: «Рельеф» недоступен'),
+                  o.coloring == LineColoring.auto || _slopeOk ? _coloringHint() : t('Маршрут ровный: «Рельеф» недоступен'),
                   style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ),
+              if (o.coloring == LineColoring.single) Padding(padding: const EdgeInsets.only(top: 10), child: _colorSwatches()),
               if (_hasVehicle)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -569,7 +601,12 @@ class _PosterPageState extends State<PosterPage> {
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 500),
             child: _busy && _pts.length > 1
-                ? Material(key: const ValueKey("building"), child: PosterBuildOverlay(points: _pts, map: _buildMap, wide: o.format == PosterFormat.horizontal))
+                ? Material(key: const ValueKey("building"), child: PosterBuildOverlay(
+                    points: _pts,
+                    map: _buildMap,
+                    wide: o.format == PosterFormat.horizontal,
+                    duration: _drawTime,
+                    restartToken: _drawToken))
                 : const SizedBox.shrink(key: ValueKey("idle")),
           ),
         ),

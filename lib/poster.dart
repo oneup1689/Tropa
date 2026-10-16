@@ -18,7 +18,7 @@ import 'settings.dart';
 import 'stats.dart';
 import 'trim.dart';
 import 'poster_scale.dart';
-export 'poster_scale.dart' show LineColoring, LineScale, pickRelief, slopeAvailable;
+export 'poster_scale.dart' show LineColoring, LineScale, pickAuto, pickRelief, posterColorIndex, posterPalette, slopeAvailable;
 import 'weather.dart';
 import 'l10n.dart';
 import 'units.dart';
@@ -36,7 +36,10 @@ class PosterOptions {
   PosterFormat format = PosterFormat.vertical;
   PosterBackground background = PosterBackground.tropa;
   bool darkMap = true; // the map is always the dark, toned-down one; the field stays for the code that draws it
-  LineColoring coloring = LineColoring.single;
+  LineColoring coloring = LineColoring.auto;
+
+  /// Index in [posterPalette] for a single-colour line; null = the colour the walk gets by itself.
+  int? lineColorIndex;
 
   bool distance = true;
   bool time = true;
@@ -336,6 +339,25 @@ void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, in
       pieces.add(([a, b], null));
     }
   }
+  // A soft glow under the whole line (one blurred path, not one per piece): the line stands out of any background.
+  final glow = Path();
+  for (final pc in pieces) {
+    if (pc.$2 == null) continue;
+    glow.moveTo(pc.$1.first.dx, pc.$1.first.dy);
+    for (final q in pc.$1.skip(1)) {
+      glow.lineTo(q.dx, q.dy);
+    }
+  }
+  c.drawPath(
+    glow,
+    Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 34 * lineScale
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..color = (scale.coloring == LineColoring.single ? scale.singleColor : const Color(0xFFFFFFFF)).withValues(alpha: scale.coloring == LineColoring.single ? 0.42 : 0.22)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 16 * lineScale),
+  );
   for (final pc in pieces) {
     if (pc.$2 == null) {
       _dashed(c, pc.$1.first, pc.$1.last, faint);
@@ -365,14 +387,30 @@ void drawPosterRoute(Canvas c, PosterOptions o, List<TrackPoint> pts, int i0, in
 
   if (!o.hideEnds) {
     // The finish is smaller and drawn last: on a loop both markers stay visible.
-    _marker(c, proj(pts[i0].lat, pts[i0].lon), const Color(0xFF00E676), 29 * lineScale, 21 * lineScale);
+    _marker(c, proj(pts[i0].lat, pts[i0].lon), const Color(0xFF00E676), 29 * lineScale, 21 * lineScale, start: true);
     _marker(c, proj(pts[i1].lat, pts[i1].lon), const Color(0xFFFF1744), 20 * lineScale, 12 * lineScale);
   }
 }
 
-void _marker(Canvas c, Offset at, Color color, double outer, double inner) {
+/// Start: a green disc with a small "play" triangle; finish: a red disc with a white centre (a target). Both on a white
+/// ring with a soft shadow.
+void _marker(Canvas c, Offset at, Color color, double outer, double inner, {bool start = false}) {
+  c.drawCircle(at.translate(0, 3), outer + 1, Paint()..color = const Color(0x66000000));
   c.drawCircle(at, outer, Paint()..color = const Color(0xFFFFFFFF));
   c.drawCircle(at, inner, Paint()..color = color);
+  if (start) {
+    final r = inner * 0.5;
+    c.drawPath(
+      Path()
+        ..moveTo(at.dx - r * 0.45, at.dy - r)
+        ..lineTo(at.dx + r * 0.95, at.dy)
+        ..lineTo(at.dx - r * 0.45, at.dy + r)
+        ..close(),
+      Paint()..color = const Color(0xFFFFFFFF),
+    );
+  } else {
+    c.drawCircle(at, inner * 0.38, Paint()..color = const Color(0xFFFFFFFF));
+  }
 }
 
 /// Draws [pts] as dashes ([on] drawn, [off] skipped), starting [phase] units into the pattern; returns the phase at the end
@@ -478,10 +516,12 @@ void _drawHeader(Canvas c, PosterOptions o, int startMs, int endMs, int offsetSe
 LineScale buildLineScale(PosterOptions o, TravelMode mode, List<TrackPoint> pts, int i0, int i1, List<TravelMode> modeAt,
     List<double> speeds, List<double> alt) {
   var coloring = o.coloring;
+  if (coloring == LineColoring.auto) coloring = pickAuto(mode, modeAt, speeds, alt, i0, i1);
   if (coloring == LineColoring.relief) coloring = alt.length > i1 ? pickRelief(alt, i0, i1) : LineColoring.single;
   if (coloring == LineColoring.slope && !slopeAvailable(alt, i0, i1)) coloring = LineColoring.single;
   if (coloring == LineColoring.height && alt.length <= i1) coloring = LineColoring.single;
-  return LineScale.compute(coloring, mode, pts, i0, i1, modeAt, speeds, alt);
+  final single = posterPalette[(o.lineColorIndex ?? posterColorIndex(pts.first.tsMs)) % posterPalette.length];
+  return LineScale.compute(coloring, mode, pts, i0, i1, modeAt, speeds, alt, singleColor: single);
 }
 
 void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegment> segments, TravelMode mode, TrackStats st,
@@ -533,8 +573,10 @@ void _drawBottom(Canvas c, PosterOptions o, List<TrackPoint> pts, List<TrackSegm
   final rows = (cells.length / 2).ceil();
   for (var i = 0; i < cells.length; i++) {
     final x = 64 + (i % 2) * colW, yy = y + (i ~/ 2) * 142;
-    drawText(c, cells[i].$1, Offset(x, yy), headingStyle(54, weight: 700), maxWidth: colW - 16, maxLines: 1);
-    drawText(c, cells[i].$2, Offset(x, yy + 70), bodyStyle(30, color: const Color(0xFFB0BEC5)));
+    // The first figure (the distance) is the main one of the poster: bigger than the rest.
+    final main = i == 0 && cells.length > 1;
+    drawText(c, cells[i].$1, Offset(x, yy), headingStyle(main ? 70 : 54, weight: 700), maxWidth: colW - 16, maxLines: 1);
+    drawText(c, cells[i].$2, Offset(x, yy + (main ? 82 : 70)), bodyStyle(30, color: const Color(0xFFB0BEC5)));
   }
   y += rows * 142 + 8;
 
