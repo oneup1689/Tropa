@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'data_section.dart';
+import 'help_page.dart';
 import 'l10n.dart';
 import 'recorder.dart';
 import 'settings.dart';
@@ -13,8 +14,7 @@ IconData _sectionIcon(String section) => switch (section) {
       'Автоматическая запись' => Icons.motion_photos_auto_outlined,
       'Запись' => Icons.fiber_manual_record_outlined,
       'Маршрут и данные' => Icons.route_outlined,
-      'Навигация' => Icons.navigation_outlined,
-      'Звуки и вибрация' => Icons.volume_up_outlined,
+      'Звук и навигация' => Icons.volume_up_outlined,
       'Данные' => Icons.folder_outlined,
       'Приватность' => Icons.lock_outline,
       _ => Icons.tune,
@@ -31,7 +31,7 @@ class SettingsPage extends StatelessWidget {
       listenable: s,
       builder: (context, _) {
         final english = L10n.current == AppLang.en;
-        final visible = settingDefs.where((d) => d.key != 'auto_mode' && (s.pro || !d.proOnly) && (english || !d.englishOnly)).toList();
+        final visible = settingDefs.where((d) => d.key != 'auto_mode' && !d.hidden && (s.pro || !d.proOnly) && (english || !d.englishOnly)).toList();
         final sections = <String>[];
         for (final d in visible) {
           if (!sections.contains(d.section)) sections.add(d.section);
@@ -82,6 +82,18 @@ class SettingsPage extends StatelessWidget {
                   ]),
                 ),
               ],
+              Padding(
+                padding: const EdgeInsets.only(top: 22),
+                child: Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.help_outline),
+                    title: Text(t('Справка')),
+                    subtitle: Text(t('Ответы на частые вопросы')),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HelpPage())),
+                  ),
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(6, 22, 4, 6),
                 child: Row(children: [

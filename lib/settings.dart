@@ -27,6 +27,10 @@ class SettingDef {
 
   /// Shown only in the English interface (the Russian one is always metric).
   final bool englishOnly;
+
+  /// Not on the settings screen at all: the default is the optimal value and the person has no reason to change it.
+  /// Whatever an older build stored for such a key is dropped at the start.
+  final bool hidden;
   final List<(String, String)> options; // choice: (stored value, label)
   final double min;
   final double max;
@@ -45,6 +49,7 @@ class SettingDef {
     this.subtitle = '',
     this.proOnly = false,
     this.englishOnly = false,
+    this.hidden = false,
     this.options = const [],
     this.min = 0,
     this.max = 0,
@@ -132,6 +137,7 @@ const List<SettingDef> settingDefs = [
     kind: SettingKind.number,
     defaultValue: 50,
     proOnly: true,
+    hidden: true,
     min: 15,
     max: 100,
     step: 5,
@@ -145,6 +151,7 @@ const List<SettingDef> settingDefs = [
     kind: SettingKind.number,
     defaultValue: 0,
     proOnly: true,
+    hidden: true,
     min: 0,
     max: 10,
     step: 1,
@@ -159,6 +166,7 @@ const List<SettingDef> settingDefs = [
     kind: SettingKind.toggle,
     defaultValue: true,
     proOnly: true,
+    hidden: true,
   ),
   SettingDef(
     key: 'heal_enabled',
@@ -203,6 +211,7 @@ const List<SettingDef> settingDefs = [
     kind: SettingKind.number,
     defaultValue: 0,
     proOnly: true,
+    hidden: true,
     min: 0,
     max: 500,
     step: 25,
@@ -210,18 +219,19 @@ const List<SettingDef> settingDefs = [
     zeroMeansAuto: true,
   ),
   SettingDef(
+    key: 'sound_mode',
+    title: 'Звуки и вибрация',
+    subtitle: 'Сигналы начала и конца записи, цели, схода с маршрута, поворотов и тревоги. Относится и к записи, и к навигации',
+    section: 'Звук и навигация',
+    kind: SettingKind.choice,
+    defaultValue: 'both',
+    options: [('both', 'Звук и вибрация'), ('sound', 'Только звук'), ('vibe', 'Только вибрация'), ('silent', 'Без звука')],
+  ),
+  SettingDef(
     key: 'nav_voice',
     title: 'Голосовые подсказки',
     subtitle: 'При ходьбе по маршруту: «Через 100 метров налево». Голос берётся из настроек телефона',
-    section: 'Навигация',
-    kind: SettingKind.toggle,
-    defaultValue: true,
-  ),
-  SettingDef(
-    key: 'nav_vibrate',
-    title: 'Вибрация перед поворотом',
-    subtitle: 'Один импульс — налево, два — направо',
-    section: 'Навигация',
+    section: 'Звук и навигация',
     kind: SettingKind.toggle,
     defaultValue: true,
   ),
@@ -229,18 +239,9 @@ const List<SettingDef> settingDefs = [
     key: 'nav_keep_screen',
     title: 'Не гасить экран при навигации',
     subtitle: 'Надёжнее для голоса, но быстрее садит батарею',
-    section: 'Навигация',
+    section: 'Звук и навигация',
     kind: SettingKind.toggle,
     defaultValue: true,
-  ),
-  SettingDef(
-    key: 'sound_mode',
-    title: 'Звуки и вибрация',
-    subtitle: 'Сигналы начала и конца записи, цели, схода с маршрута, поворотов и тревоги',
-    section: 'Звуки и вибрация',
-    kind: SettingKind.choice,
-    defaultValue: 'both',
-    options: [('both', 'Звук и вибрация'), ('sound', 'Только звук'), ('vibe', 'Только вибрация'), ('silent', 'Без звука')],
   ),
   SettingDef(
     key: 'cloud_backup',
@@ -250,12 +251,13 @@ const List<SettingDef> settingDefs = [
     section: 'Приватность',
     kind: SettingKind.toggle,
     defaultValue: false,
+    proOnly: true,
   ),
   SettingDef(
     key: 'offroute',
     title: 'Чувствительность «вы сошли с маршрута»',
     subtitle: 'Строгая — предупреждение при отклонении от 25 м, свободная — от 70 м',
-    section: 'Навигация',
+    section: 'Звук и навигация',
     kind: SettingKind.choice,
     defaultValue: 'normal',
     proOnly: true,
@@ -287,6 +289,10 @@ class AppSettings extends ChangeNotifier {
     } catch (e) {
       DebugLog.instance.log('SETTINGS', 'load failed, defaults used: $e');
       // defaults are used
+    }
+    // Hidden settings always have their default (an older build or Pro mode may have stored something else).
+    for (final d in settingDefs) {
+      if (d.hidden) _values.remove(d.key);
     }
     _syncTheme();
     _syncLocale();

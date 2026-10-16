@@ -46,7 +46,8 @@ class RouteNavigator extends ChangeNotifier {
   bool _listening = false;
 
   bool get voiceOn => AppSettings.instance.getBool('nav_voice');
-  bool get vibrateOn => AppSettings.instance.getBool('nav_vibrate');
+  /// The vibration before a turn follows the general "sound and vibration" setting (checked by the native side).
+  bool get vibrateOn => true;
 
   /// The service waits for the person at the start of the route; navigation begins when the recording does.
   bool pending = false;

@@ -680,4 +680,40 @@ const Map<String, String> enStrings = {
   'Видео из галереи': 'Video from the gallery',
   'Фото прикреплено': 'Photo attached',
   'Видео прикреплено': 'Video attached',
+  // help and merged settings
+  'Звук и навигация': 'Sound and navigation',
+  'Сигналы начала и конца записи, цели, схода с маршрута, поворотов и тревоги. Относится и к записи, и к навигации':
+      'Signals for the start and end of recording, the goal, leaving the route, turns and alerts. It applies to both recording and navigation',
+  'Справка': 'Help',
+  'Ответы на частые вопросы': 'Answers to common questions',
+  'Коротко о том, как всё устроено. Нажмите на вопрос, чтобы увидеть ответ.': 'A short guide to how everything works. Tap a question to see the answer.',
+  'В режиме «Профи» в настройках больше параметров: обрезка начала и конца маршрута, разбиение на прогулки, копия в аккаунте Google и другие.':
+      'In Pro mode the settings have more options: trimming the start and end of a route, splitting into walks, the backup to your Google account and others.',
+  'Как начать запись?': 'How do I start recording?',
+  'Нажмите «Начать запись» на главном экране. Приложение попросит доступ к геолокации: выберите «Разрешить всегда», тогда запись не прервётся, когда экран погаснет. Остановить запись можно той же кнопкой.':
+      'Tap "Start recording" on the main screen. The app will ask for location access: choose "Allow all the time", so the recording does not stop when the screen goes off. The same button stops it.',
+  'Нужен ли интернет?': 'Do I need the internet?',
+  'Нет: запись и карты работают без интернета. Он нужен только чтобы скачать карту и для постера: погода, высоты и название места берутся из сети.':
+      'No: recording and maps work offline. You only need it to download a map and for the poster: the weather, heights and the place name come from the network.',
+  'Как скачать карту?': 'How do I download a map?',
+  'Настройки → Данные → Карты, дальше выберите страну или регион. Перед загрузкой приложение покажет размер. Карта нужна, чтобы смотреть маршрут и делать постер, для самой записи она не нужна.':
+      'Settings → Data → Maps, then pick a country or a region. The app shows the size before it downloads. The map is for viewing a route and making a poster; recording does not need it.',
+  'Как идти по маршруту?': 'How do I follow a route?',
+  'Откройте вкладку «Тропы» → «Маршруты», выберите маршрут и нажмите «Идти по маршруту». Приложение подскажет повороты голосом и вибрацией, а на карте будет видно, где вы. Если вы далеко от старта, выберите «Ждать у старта»: запись и навигация начнутся сами, когда вы подойдёте.':
+      'Open the Trails tab → Routes, pick a route and tap "Follow the route". The app tells you the turns by voice and vibration, and the map shows where you are. If you are far from the start, choose "Wait at the start": recording and navigation begin by themselves when you arrive.',
+  'Как записывать без кнопки?': 'How do I record without a button?',
+  'Нажмите значок календаря на главной карточке и включите «Начинать запись автоматически»: запись начнётся сама, когда вы пойдёте. Там же можно запланировать прогулку на нужное время.':
+      'Tap the calendar icon on the main card and switch on "Start recording automatically": recording begins by itself when you start walking. You can also schedule a walk for a chosen time there.',
+  'Заметки, фото и видео': 'Notes, photos and videos',
+  'Во время записи кнопка «Заметка» сохраняет текст, фото или видео в том месте, где вы стоите. Фото и видео лежат в галерее телефона, в альбоме Tropa. Заметку можно добавить и после прогулки: откройте прогулку в списке и нажмите «Добавить заметку».':
+      'During a recording the "Note" button saves text, a photo or a video where you stand. Photos and videos are kept in the phone gallery, in the Tropa album. You can add a note after the walk too: open the walk in the list and tap "Add a note".',
+  'Как сделать постер?': 'How do I make a poster?',
+  'Откройте прогулку и нажмите «Постер». Выберите формат, что показать и фон (карта или стиль Tropa), нажмите «Создать», а потом «Сохранить» или «Поделиться». Цвет линии приложение подбирает само.':
+      'Open a walk and tap "Poster". Choose the format, what to show and the background (the map or the Tropa style), tap "Create", then "Save" or "Share". The app picks the colour of the line by itself.',
+  'Как сохранить прогулки и перенести на другой телефон?': 'How do I save my walks and move them to another phone?',
+  'Настройки → Данные → «Резервная копия» собирает все прогулки в один файл. На новом телефоне откройте «Восстановить из копии» и выберите этот файл: повторов не будет.':
+      'Settings → Data → "Backup" puts all the walks into one file. On the new phone open "Restore from backup" and pick that file: nothing is duplicated.',
+  'Что уходит в интернет?': 'What goes to the internet?',
+  'Прогулки хранятся только на вашем телефоне. В сеть уходят лишь запросы для постера (погода, высоты и название места для координат этого места) и загрузка карт. Без вашего действия приложение ничего не отправляет.':
+      'Your walks are kept only on your phone. Only the requests for the poster (the weather, heights and place name for the coordinates of that place) and the map downloads go to the network. The app sends nothing without your action.',
 };
