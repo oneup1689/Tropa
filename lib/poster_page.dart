@@ -328,6 +328,7 @@ class _PosterPageState extends State<PosterPage> {
       _snack(t('Для постера нужны хотя бы две точки маршрута'));
       return;
     }
+    if (!_pro) o.coloring = LineColoring.auto; // the amateur screen has no choice of colouring
     o.title = _title.text;
     o.region = _region.text;
     o.waterTempManual = double.tryParse(_water.text.trim().replaceAll(',', '.'));
@@ -509,29 +510,32 @@ class _PosterPageState extends State<PosterPage> {
               ),
               if (!_hasMap) _fragmentCard(text),
               const SizedBox(height: 16),
-              Text(t('Окраска линии'), style: text.titleSmall),
-              const SizedBox(height: 8),
-              Wrap(spacing: 8, children: [
-                for (final (v, label) in [
-                  (LineColoring.auto, t('Авто')),
-                  (LineColoring.speed, t('Скорость')),
-                  (LineColoring.relief, t('Рельеф')),
-                  (LineColoring.single, t('Цвет')),
-                ])
-                  ChoiceChip(
-                    label: Text(label),
-                    selected: o.coloring == v,
-                    onSelected: v == LineColoring.relief && !_slopeOk ? null : (_) => setState(() => o.coloring = v),
+              // Amateur mode: no choice, the colouring is always Auto. Pro: the four ways.
+              if (_pro) ...[
+                Text(t('Окраска линии'), style: text.titleSmall),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, children: [
+                  for (final (v, label) in [
+                    (LineColoring.auto, t('Авто')),
+                    (LineColoring.speed, t('Скорость')),
+                    (LineColoring.relief, t('Рельеф')),
+                    (LineColoring.single, t('Цвет')),
+                  ])
+                    ChoiceChip(
+                      label: Text(label),
+                      selected: o.coloring == v,
+                      onSelected: v == LineColoring.relief && !_slopeOk ? null : (_) => setState(() => o.coloring = v),
+                    ),
+                ]),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    o.coloring == LineColoring.auto || _slopeOk ? _coloringHint() : t('Маршрут ровный: «Рельеф» недоступен'),
+                    style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
-              ]),
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  o.coloring == LineColoring.auto || _slopeOk ? _coloringHint() : t('Маршрут ровный: «Рельеф» недоступен'),
-                  style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
-              ),
-              if (o.coloring == LineColoring.single) Padding(padding: const EdgeInsets.only(top: 10), child: _colorSwatches()),
+                if (o.coloring == LineColoring.single) Padding(padding: const EdgeInsets.only(top: 10), child: _colorSwatches()),
+              ],
               if (_hasVehicle)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
